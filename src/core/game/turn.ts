@@ -8,10 +8,11 @@ export function nextPlayerIndex(
 ): number {
   if (playerCount <= 0) throw new Error('playerCount must be > 0');
   const steps = 1 + skip;
-
   let idx = currentIndex;
+
   for (let i = 0; i < steps; i++) {
     idx = (idx + direction + playerCount) % playerCount;
   }
+
   return idx;
 }

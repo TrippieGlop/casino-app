@@ -5,5 +5,5 @@ export type Player = {
   id: string;
   name: string;
   type: PlayerType;
-  difficulty?: Difficulty; // only for cpu
+  difficulty?: Difficulty;
 };

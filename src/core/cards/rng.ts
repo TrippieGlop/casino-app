@@ -1,4 +1,4 @@
-// Seedable RNG (Mulberry32). Not cryptographic; good for deterministic shuffles.
+// Seedable RNG (Mulberry32). Not cryptographic; perfect for deterministic shuffles.
 export function mulberry32(seed: number) {
   let t = seed >>> 0;
   return function rng() {
