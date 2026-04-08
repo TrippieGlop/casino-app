@@ -8,6 +8,7 @@ import {
   spadesReducer,
   type Seat,
 } from '@/core/rules/spades';
+import { BackButton } from '@/components/BackButton';
 
 const HUMAN_ID = 'spades-p1';
 const HUMAN_SEAT: Seat = 0;
@@ -75,6 +76,9 @@ export default function SpadesPage() {
 
   return (
     <main className="min-h-screen p-8 space-y-8">
+      <div className="mb-4">
+        <BackButton />
+      </div>
       <div className="flex items-baseline justify-between">
         <h1 className="text-2xl font-semibold">Spades</h1>
         <div className="flex gap-3">

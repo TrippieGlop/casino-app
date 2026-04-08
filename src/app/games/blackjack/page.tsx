@@ -3,6 +3,7 @@
 import { useReducer } from 'react';
 import type { StandardCard } from '@/core/cards/types';
 import { blackjackReducer, createInitialBlackjackState } from '@/core/rules/blackjack/reducer';
+import { BackButton } from "@/components/BackButton";
 
 function renderCard(c: StandardCard) {
   return `${c.rank}${c.suit}`;
@@ -19,6 +20,9 @@ export default function BlackjackPage() {
 
   return (
     <main className="min-h-screen p-8">
+      <div className="mb-4">
+        <BackButton />
+      </div>
       <div className="flex items-baseline justify-between">
         <h1 className="text-2xl font-semibold">Blackjack</h1>
         <div className="text-sm opacity-70 font-mono">seed: {state.seed}</div>

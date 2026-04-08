@@ -11,6 +11,7 @@ import {
   type UnoCard,
   type UnoColour,
 } from '@/core/rules/uno';
+import { BackButton } from '@/components/BackButton';
 
 function renderCard(card: UnoCard) {
   if (isWild(card)) {
@@ -39,6 +40,9 @@ export default function UnoPage() {
 
   return (
     <main className="min-h-screen p-8 space-y-8">
+      <div className="mb-4">
+        <BackButton />
+      </div>
       <div className="flex items-baseline justify-between">
         <h1 className="text-2xl font-semibold">UNO</h1>
         <button

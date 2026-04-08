@@ -2,6 +2,7 @@
 
 import { useReducer } from 'react';
 import { createInitialSolitaireState, solitaireReducer } from '@/core/rules/solitaire';
+import { BackButton } from '@/components/BackButton';
 
 function renderCard(card: { rank: string; suit: string; faceUp: boolean }) {
   if (!card.faceUp) return '🂠';
@@ -15,6 +16,10 @@ export default function SolitairePage() {
 
   return (
     <main className="min-h-screen p-8 space-y-8">
+      <div className="mb-4">
+        <BackButton />
+      </div>
+      
       <div className="flex items-baseline justify-between">
         <h1 className="text-2xl font-semibold">Solitaire</h1>
         <button
