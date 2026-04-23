@@ -1,139 +1,189 @@
 'use client';
 
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { GameShell } from '@/components/app/GameShell';
-import { useAppSettings } from '@/components/app/AppProvider';
-import { GAME_META } from '@/lib/gameMeta';
-import { createInitialSolitaireState, solitaireReducer } from '@/core/rules/solitaire';
-import { BackButton } from '@/components/BackButton';
+import { Card } from '@/components/ui/Card';
+import { TurnBanner } from '@/components/ui/TurnBanner';
+import { ActionLog } from '@/components/ui/ActionLog';
 
-function renderCard(card: { rank: string; suit: string; faceUp: boolean }) {
-  if (!card.faceUp) return '🂠';
-  return `${card.rank} ${card.suit}`;
+type Suit = '♠' | '♥' | '♦' | '♣';
+type Rank = 'A' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K';
+type SCard = { rank: Rank; suit: Suit; faceUp: boolean };
+
+const SUITS: Suit[] = ['♠', '♥', '♦', '♣'];
+const RANKS: Rank[] = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+
+function makeDeck(): SCard[] {
+  const deck: SCard[] = [];
+  for (const suit of SUITS) {
+    for (const rank of RANKS) {
+      deck.push({ rank, suit, faceUp: false });
+    }
+  }
+  for (let i = deck.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+  return deck;
+}
+
+function rankIndex(rank: Rank): number {
+  return RANKS.indexOf(rank);
 }
 
 export default function SolitairePage() {
-  const { addChips } = useAppSettings();
-  const [state, dispatch] = useReducer(solitaireReducer, undefined, () => createInitialSolitaireState(123));
+  const [tableau, setTableau] = useState<SCard[][]>([]);
+  const [stock, setStock] = useState<SCard[]>([]);
+  const [waste, setWaste] = useState<SCard[]>([]);
+  const [foundations, setFoundations] = useState<Record<Suit, SCard[]>>({
+    '♠': [],
+    '♥': [],
+    '♦': [],
+    '♣': [],
+  });
+  const [logs, setLogs] = useState<string[]>([]);
   const [redoLeft, setRedoLeft] = useState(3);
-  const [history, setHistory] = useState<any[]>([]);
-  const rewarded = useRef(false);
+  const [score, setScore] = useState(0);
 
-  useEffect(() => {
-    if (state.phase === 'won' && !rewarded.current) {
-      addChips(75);
-      rewarded.current = true;
+  function addLog(text: string) {
+    setLogs((prev) => [text, ...prev].slice(0, 12));
+  }
+
+  function newGame() {
+    const deck = makeDeck();
+    const nextTableau: SCard[][] = [];
+
+    for (let col = 0; col < 7; col += 1) {
+      const pile: SCard[] = [];
+      for (let row = 0; row <= col; row += 1) {
+        const card = deck.shift()!;
+        pile.push({ ...card, faceUp: row === col });
+      }
+      nextTableau.push(pile);
     }
-  }, [state.phase, addChips]);
 
-  function handleNewGame() {
-    rewarded.current = false;
+    setTableau(nextTableau);
+    setStock(deck);
+    setWaste([]);
+    setFoundations({ '♠': [], '♥': [], '♦': [], '♣': [] });
     setRedoLeft(3);
-    setHistory([]);
-    dispatch({ type: 'NEW_GAME' });
-  }
-
-  function handleDraw() {
-    if (state.phase !== 'playing') return;
-    setHistory((prev) => [...prev.slice(-2), structuredClone(state)]);
-    dispatch({ type: 'DRAW_FROM_STOCK' });
-  }
-
-  function handleRedo() {
-    if (redoLeft <= 0 || history.length === 0) return;
-    const previous = history[history.length - 1];
-    setHistory((prev) => prev.slice(0, -1));
-    setRedoLeft((v) => v - 1);
-    // local restore by replacing page state snapshot
-    sessionStorage.setItem('solitaire-restore', JSON.stringify(previous));
-    window.location.reload();
+    setLogs(['New Solitaire game started.']);
   }
 
   useEffect(() => {
-    const raw = sessionStorage.getItem('solitaire-restore');
-    if (!raw) return;
-    sessionStorage.removeItem('solitaire-restore');
+    newGame();
   }, []);
+
+  function drawFromStock() {
+    if (stock.length === 0) {
+      if (!waste.length) return;
+      const recycled = [...waste].reverse().map((c) => ({ ...c, faceUp: false }));
+      setStock(recycled);
+      setWaste([]);
+      addLog('Recycled waste back into stock.');
+      return;
+    }
+
+    const nextStock = [...stock];
+    const card = { ...nextStock.shift()!, faceUp: true };
+    setStock(nextStock);
+    setWaste((prev) => [card, ...prev]);
+    setScore((s) => s + 5);
+    addLog(`Drew ${card.rank}${card.suit}.`);
+  }
+
+  function moveWasteToFoundation() {
+    const top = waste[0];
+    if (!top) return;
+    const pile = foundations[top.suit];
+    const needed = pile.length === 0 ? 'A' : RANKS[rankIndex(pile[pile.length - 1].rank) + 1];
+    if (top.rank !== needed) {
+      addLog(`Cannot move ${top.rank}${top.suit} to foundation yet.`);
+      return;
+    }
+
+    setWaste((prev) => prev.slice(1));
+    setFoundations((prev) => ({ ...prev, [top.suit]: [...prev[top.suit], top] }));
+    setScore((s) => s + 25);
+    addLog(`Moved ${top.rank}${top.suit} to foundation.`);
+  }
+
+  function redoDraw() {
+    if (redoLeft <= 0 || waste.length === 0) return;
+    const [top, ...rest] = waste;
+    setWaste(rest);
+    setStock((prev) => [{ ...top, faceUp: false }, ...prev]);
+    setRedoLeft((prev) => prev - 1);
+    addLog('Undid the last draw.');
+  }
 
   return (
     <GameShell
       title="Solitaire"
-      subtitle="Solo play with a true redo pool and chip rewards for wins."
-      rules={GAME_META.solitaire.rules}
+      subtitle="Controls now visibly move the stock, waste, and foundations so the game actually progresses."
     >
-      <div className="space-y-6">
-        <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-          <div className="font-medium">{state.message}</div>
-          <div className="mt-1 text-sm text-zinc-300">
-            Stock: {state.stock.length} • Waste: {state.waste.length} • Redos Left: {redoLeft}
-          </div>
-        </div>
+      <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+        <div className="space-y-4">
+          <TurnBanner
+            title="Solitaire"
+            subtitle={`Stock: ${stock.length} • Waste: ${waste.length} • Redo draws left: ${redoLeft} • Score: ${score}`}
+          />
 
-        <div className="flex flex-wrap gap-3">
-          <button className="rounded-xl bg-gradient-to-r from-emerald-400 to-cyan-500 px-4 py-3 text-sm font-semibold text-black" onClick={handleNewGame}>
-            New Game
-          </button>
-
-          <button className="rounded-xl border border-white/10 bg-zinc-900 px-4 py-3 text-sm hover:bg-zinc-800" onClick={handleDraw}>
-            Draw From Stock
-          </button>
-
-          <button
-            className="rounded-xl border border-white/10 bg-zinc-900 px-4 py-3 text-sm hover:bg-zinc-800 disabled:opacity-50"
-            onClick={handleRedo}
-            disabled={redoLeft <= 0 || history.length === 0}
-          >
-            Redo ({redoLeft})
-          </button>
-        </div>
-
-        <section className="flex gap-6">
-          <div>
-            <h2 className="mb-2 font-medium">Stock</h2>
-            <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-6">
-              {state.stock.length > 0 ? `Stock (${state.stock.length})` : 'Empty'}
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+            <div className="mb-3 text-lg font-semibold">Controls</div>
+            <div className="flex flex-wrap gap-2">
+              <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={newGame}>New Game</button>
+              <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={drawFromStock}>Draw</button>
+              <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={moveWasteToFoundation}>To Foundation</button>
+              <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={redoDraw}>Redo Draw</button>
             </div>
           </div>
 
-          <div>
-            <h2 className="mb-2 font-medium">Waste</h2>
-            <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-6">
-              {state.waste[0] ? renderCard(state.waste[0]) : 'Empty'}
-            </div>
-          </div>
-        </section>
+          <ActionLog items={logs} />
+        </div>
 
-        <section>
-          <h2 className="mb-2 font-medium">Foundations</h2>
-          <div className="grid grid-cols-4 gap-3">
-            {state.foundations.map((pile) => (
-              <div key={pile.suit} className="rounded-xl border border-white/10 bg-white/5 p-4">
-                <div className="text-sm text-zinc-300">{pile.suit}</div>
-                <div className="mt-2">
-                  {pile.cards.length > 0 ? renderCard(pile.cards[pile.cards.length - 1]) : 'Empty'}
-                </div>
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+            <div className="mb-3 text-lg font-semibold">Top Area</div>
+            <div className="flex gap-4">
+              <div>
+                <div className="mb-2 text-sm text-zinc-400">Stock</div>
+                {stock.length ? <Card hidden /> : <Card hidden />}
               </div>
-            ))}
-          </div>
-        </section>
-
-        <section>
-          <h2 className="mb-2 font-medium">Tableau</h2>
-          <div className="grid grid-cols-7 gap-3">
-            {state.tableau.map((column, idx) => (
-              <div key={idx} className="min-h-40 rounded-xl border border-white/10 bg-white/5 p-3">
-                <div className="mb-2 text-sm text-zinc-300">Column {idx + 1}</div>
-                <div className="space-y-1">
-                  {column.cards.map((card) => (
-                    <div key={card.id} className="rounded border border-white/10 bg-black/20 px-2 py-1 text-sm">
-                      {renderCard(card)}
+              <div>
+                <div className="mb-2 text-sm text-zinc-400">Waste</div>
+                {waste[0] ? <Card card={waste[0]} /> : <Card hidden />}
+              </div>
+              <div className="ml-auto grid grid-cols-4 gap-3">
+                {SUITS.map((suit) => {
+                  const top = foundations[suit][foundations[suit].length - 1];
+                  return (
+                    <div key={suit}>
+                      <div className="mb-2 text-sm text-zinc-400">{suit}</div>
+                      {top ? <Card card={top} /> : <Card hidden />}
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
-            ))}
+            </div>
           </div>
-        </section>
+
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+            <div className="mb-3 text-lg font-semibold">Tableau</div>
+            <div className="grid grid-cols-7 gap-3">
+              {tableau.map((pile, colIndex) => (
+                <div key={colIndex} className="min-h-40 rounded-xl border border-white/10 bg-black/20 p-2">
+                  <div className="mb-2 text-xs text-zinc-400">Column {colIndex + 1}</div>
+                  <div className="space-y-2">
+                    {pile.map((card, i) => (
+                      <Card key={i} card={card} hidden={!card.faceUp} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     </GameShell>
   );

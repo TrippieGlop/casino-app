@@ -2,7 +2,7 @@
 
 import { useAppSettings, type AccentTheme } from '@/components/app/AppProvider';
 
-const themes: AccentTheme[] = ['emerald', 'blue', 'violet', 'rose', 'amber', 'cyan', 'lime', 'orange', 'pink'];
+const themes: AccentTheme[] = ['emerald', 'blue', 'violet', 'rose', 'amber', 'cyan', 'lime', 'orange', 'pink', 'gold', 'neon'];
 
 export function ThemeControl() {
   const { accentTheme, setAccentTheme } = useAppSettings();

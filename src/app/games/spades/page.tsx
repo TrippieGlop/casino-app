@@ -1,223 +1,221 @@
 'use client';
 
-import { useEffect, useReducer, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { GameShell } from '@/components/app/GameShell';
+import { Card } from '@/components/ui/Card';
+import { TurnBanner } from '@/components/ui/TurnBanner';
+import { ActionLog } from '@/components/ui/ActionLog';
 import { useAppSettings } from '@/components/app/AppProvider';
-import { GAME_META } from '@/lib/gameMeta';
-import {
-  createInitialSpadesState,
-  legalPlays,
-  renderSpadesCard,
-  spadesReducer,
-  type Seat,
-} from '@/core/rules/spades';
-import { BackButton } from '@/components/BackButton';
 
-const HUMAN_ID = 'spades-p1';
-const HUMAN_SEAT: Seat = 0;
+type Suit = '♠' | '♥' | '♦' | '♣';
+type Rank = '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A';
+type SCard = { rank: Rank; suit: Suit };
+
+const SUITS: Suit[] = ['♠', '♥', '♦', '♣'];
+const RANKS: Rank[] = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+
+function makeDeck(): SCard[] {
+  const deck: SCard[] = [];
+  for (const suit of SUITS) {
+    for (const rank of RANKS) {
+      deck.push({ rank, suit });
+    }
+  }
+  for (let i = deck.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+  return deck;
+}
+
+function rankValue(rank: Rank): number {
+  return RANKS.indexOf(rank);
+}
 
 export default function SpadesPage() {
-  const { addChips } = useAppSettings();
-  const [state, dispatch] = useReducer(spadesReducer, undefined, () =>
-    createInitialSpadesState(123)
-  );
-  const settledRound = useRef(0);
+  const { account, difficulty, addChips } = useAppSettings();
+  const displayName = account.username.trim() || 'Guest';
 
-  const me = state.players[0];
-  const east = state.players[1];
-  const south = state.players[2];
-  const west = state.players[3];
+  const [hands, setHands] = useState<SCard[][]>([[], [], [], []]);
+  const [bids, setBids] = useState<number[]>([0, 0, 0, 0]);
+  const [tricks, setTricks] = useState<number[]>([0, 0, 0, 0]);
+  const [turn, setTurn] = useState(0);
+  const [phase, setPhase] = useState<'bidding' | 'playing' | 'roundOver'>('bidding');
+  const [trick, setTrick] = useState<{ player: number; card: SCard }[]>([]);
+  const [logs, setLogs] = useState<string[]>([]);
 
-  const myTurnToBid = state.phase === 'bidding' && state.activePlayerSeat === HUMAN_SEAT;
-  const myTurnToPlay = state.phase === 'playing' && state.activePlayerSeat === HUMAN_SEAT;
-
-  const myLegalCards =
-    myTurnToPlay
-      ? legalPlays(me.hand, state.currentTrick, state.spadesBroken)
-      : [];
-
-  const legalIds = new Set(myLegalCards.map((c) => c.id));
+  const names = [displayName, 'CPU 1', 'CPU 2', 'CPU 3'];
 
   useEffect(() => {
-    if (state.phase !== 'bidding') return;
-    if (state.activePlayerSeat === HUMAN_SEAT) return;
-
-    const cpu = state.players[state.activePlayerSeat];
-    const timer = setTimeout(() => {
-      const strongCards = cpu.hand.filter(
-        (c) => c.rank === 'A' || c.rank === 'K' || c.rank === 'Q'
-      ).length;
-      const spades = cpu.hand.filter((c) => c.suit === 'spades').length;
-      const bid = Math.max(1, Math.min(6, Math.round((strongCards + spades) / 2.5)));
-      dispatch({
-        type: 'PLACE_BID',
-        playerId: cpu.id,
-        amount: bid,
-      });
-    }, 700);
-
-    return () => clearTimeout(timer);
-  }, [state.phase, state.activePlayerSeat, state.players]);
-
-  useEffect(() => {
-    if (state.phase !== 'playing' || !state.currentTrick) return;
-    if (state.activePlayerSeat === HUMAN_SEAT) return;
-
-    const cpu = state.players[state.activePlayerSeat];
-    const legal = legalPlays(cpu.hand, state.currentTrick, state.spadesBroken);
-
-    const timer = setTimeout(() => {
-      const chosen = legal[0];
-      if (!chosen) return;
-      dispatch({
-        type: 'PLAY_CARD',
-        playerId: cpu.id,
-        cardId: chosen.id,
-      });
-    }, 900);
-
-    return () => clearTimeout(timer);
-  }, [state.phase, state.activePlayerSeat, state.currentTrick, state.spadesBroken, state.players]);
-
-  useEffect(() => {
-    if ((state.phase === 'roundOver' || state.phase === 'gameOver') && state.roundNumber !== settledRound.current) {
-      const nsDelta = state.lastRoundResult?.nsScoreDelta ?? 0;
-      if (nsDelta > 0) addChips(Math.max(25, nsDelta));
-      settledRound.current = state.roundNumber;
+    const deck = makeDeck();
+    const nextHands = [[], [], [], []] as SCard[][];
+    for (let i = 0; i < 13; i += 1) {
+      for (let p = 0; p < 4; p += 1) {
+        nextHands[p].push(deck.shift()!);
+      }
     }
-  }, [state.phase, state.roundNumber, state.lastRoundResult, addChips]);
+    setHands(nextHands);
+    setBids([0, 0, 0, 0]);
+    setTricks([0, 0, 0, 0]);
+    setTurn(0);
+    setPhase('bidding');
+    setTrick([]);
+    setLogs(['New Spades round started.']);
+  }, [displayName]);
+
+  function addLog(text: string) {
+    setLogs((prev) => [text, ...prev].slice(0, 12));
+  }
+
+  function placeBid(player: number, bid: number) {
+    const nextBids = [...bids];
+    nextBids[player] = bid;
+    setBids(nextBids);
+    addLog(`${names[player]} bids ${bid}.`);
+
+    if (player === 3) {
+      setPhase('playing');
+      setTurn(0);
+      return;
+    }
+    setTurn(player + 1);
+  }
+
+  function resolveTrick(nextTrick: { player: number; card: SCard }[]) {
+    const leadSuit = nextTrick[0].card.suit;
+    let winner = nextTrick[0];
+
+    for (const play of nextTrick.slice(1)) {
+      const isTrump = play.card.suit === '♠' && winner.card.suit !== '♠';
+      const sameSuitHigher =
+        play.card.suit === winner.card.suit &&
+        rankValue(play.card.rank) > rankValue(winner.card.rank);
+      const trumpHigher =
+        play.card.suit === '♠' &&
+        winner.card.suit === '♠' &&
+        rankValue(play.card.rank) > rankValue(winner.card.rank);
+      const leadBetter =
+        winner.card.suit !== '♠' &&
+        play.card.suit === leadSuit &&
+        winner.card.suit === leadSuit &&
+        rankValue(play.card.rank) > rankValue(winner.card.rank);
+
+      if (isTrump || sameSuitHigher || trumpHigher || leadBetter) {
+        winner = play;
+      }
+    }
+
+    const nextTricks = [...tricks];
+    nextTricks[winner.player] += 1;
+    setTricks(nextTricks);
+    setTrick([]);
+    setTurn(winner.player);
+    addLog(`${names[winner.player]} wins the trick.`);
+
+    const cardsLeft = hands.reduce((sum, h) => sum + h.length, 0);
+    if (cardsLeft === 0) {
+      const team1 = nextTricks[0] + nextTricks[2];
+      const team2 = nextTricks[1] + nextTricks[3];
+      if (team1 >= bids[0] + bids[2]) {
+        const reward = difficulty === 'hard' ? 200 : difficulty === 'medium' ? 125 : 75;
+        addChips(reward);
+        addLog(`Team 1 wins. You earned $${reward}.`);
+      }
+      setPhase('roundOver');
+    }
+  }
+
+  function playCard(player: number, cardIndex: number) {
+    if (phase !== 'playing') return;
+    const card = hands[player][cardIndex];
+    if (!card) return;
+
+    const nextHands = hands.map((h) => [...h]);
+    nextHands[player].splice(cardIndex, 1);
+    setHands(nextHands);
+
+    const nextTrick = [...trick, { player, card }];
+    setTrick(nextTrick);
+    addLog(`${names[player]} plays ${card.rank}${card.suit}.`);
+
+    if (nextTrick.length === 4) {
+      resolveTrick(nextTrick);
+      return;
+    }
+
+    setTurn((player + 1) % 4);
+  }
+
+  useEffect(() => {
+    if (phase === 'bidding' && turn > 0) {
+      const timer = setTimeout(() => placeBid(turn, 2 + (turn % 2)), 500);
+      return () => clearTimeout(timer);
+    }
+
+    if (phase === 'playing' && turn > 0) {
+      const timer = setTimeout(() => playCard(turn, 0), 650);
+      return () => clearTimeout(timer);
+    }
+  }, [phase, turn, hands, trick]);
 
   return (
     <GameShell
       title="Spades"
-      subtitle="Team trick-taking with CPU opponents, round scoring, and chip rewards."
-      rules={GAME_META.spades.rules}
+      subtitle="Back to a real 4-player, 2-team structure with bidding and trick play."
     >
-      <div className="space-y-8">
-        <div className="flex items-baseline justify-between">
-          <h1 className="text-2xl font-semibold">Spades Table</h1>
-          <div className="flex gap-3">
-            <button
-              className="rounded-xl bg-gradient-to-r from-emerald-400 to-cyan-500 px-4 py-3 text-sm font-semibold text-black"
-              onClick={() => dispatch({ type: 'NEW_GAME' })}
-            >
-              New Game
-            </button>
+      <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+        <div className="space-y-4">
+          <TurnBanner
+            title={
+              phase === 'bidding'
+                ? `${names[turn]} bidding`
+                : phase === 'playing'
+                ? `${names[turn]} to play`
+                : 'Round complete'
+            }
+            subtitle={`Team 1: ${names[0]} + ${names[2]} • Team 2: ${names[1]} + ${names[3]}`}
+          />
 
-            {state.phase === 'roundOver' && (
-              <button
-                className="rounded-xl border border-white/10 bg-zinc-900 px-4 py-3 text-sm hover:bg-zinc-800"
-                onClick={() => dispatch({ type: 'NEXT_ROUND' })}
-              >
-                Next Round
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-          <div className="font-medium">{state.message}</div>
-          <div className="mt-1 text-sm text-zinc-300">
-            Phase: {state.phase} • Round: {state.roundNumber} • Dealer Seat: {state.dealerSeat}
-          </div>
-        </div>
-
-        <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          {[me, east, south, west].map((player) => (
-            <div key={player.id} className="rounded-xl border border-white/10 bg-white/5 p-4">
-              <div className="font-medium">{player.name}</div>
-              <div className="mt-1 text-sm text-zinc-300">
-                Bid: {player.bid >= 0 ? player.bid : '—'} • Tricks: {player.tricksWon} • Cards: {player.hand.length}
-              </div>
-            </div>
-          ))}
-        </section>
-
-        <section className="grid grid-cols-2 gap-4">
-          {state.teams.map((team) => (
-            <div key={team.id} className="rounded-xl border border-white/10 bg-white/5 p-4">
-              <div className="font-medium">Team {team.id}</div>
-              <div className="mt-1 text-sm text-zinc-300">
-                Score: {team.score} • Bags: {team.bags} • Bid: {team.combinedBid} • Tricks: {team.tricksTaken}
-              </div>
-            </div>
-          ))}
-        </section>
-
-        {state.phase === 'bidding' && myTurnToBid && (
-          <section className="space-y-3">
-            <h2 className="text-lg font-medium">Place Your Bid</h2>
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+            <div className="mb-3 text-lg font-semibold">Current Trick</div>
             <div className="flex flex-wrap gap-2">
-              {[0,1,2,3,4,5,6,7].map((amount) => (
-                <button
-                  key={amount}
-                  className="rounded-xl border border-white/10 bg-zinc-900 px-4 py-3 text-sm hover:bg-zinc-800"
-                  onClick={() =>
-                    dispatch({ type: 'PLACE_BID', playerId: HUMAN_ID, amount })
-                  }
-                >
-                  {amount === 0 ? 'Nil' : amount}
-                </button>
-              ))}
+              {trick.length ? trick.map((play, i) => <Card key={i} card={play.card} />) : <div className="text-sm text-zinc-400">No cards in this trick yet.</div>}
             </div>
-          </section>
-        )}
+          </div>
 
-        <section className="space-y-3">
-          <h2 className="text-lg font-medium">Current Trick</h2>
-          <div className="flex flex-wrap gap-3">
-            {state.currentTrick?.cards.length ? (
-              state.currentTrick.cards.map((play) => (
-                <div key={`${play.seat}-${play.card.id}`} className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-                  <div className="text-sm text-zinc-300">
-                    {state.players[play.seat].name}
-                  </div>
-                  <div className="font-mono">{renderSpadesCard(play.card)}</div>
+          <ActionLog items={logs} />
+        </div>
+
+        <div className="space-y-4">
+          {names.map((name, playerIndex) => (
+            <div key={playerIndex} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="font-semibold">{name}</div>
+              <div className="mt-1 text-sm text-zinc-400">Bid: {bids[playerIndex]} • Tricks: {tricks[playerIndex]}</div>
+
+              {phase === 'bidding' && playerIndex === 0 && turn === 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <button key={n} className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={() => placeBid(0, n)}>
+                      {n}
+                    </button>
+                  ))}
                 </div>
-              ))
-            ) : (
-              <div className="text-sm text-zinc-300">No cards played yet.</div>
-            )}
-          </div>
-        </section>
+              )}
 
-        <section className="space-y-3">
-          <h2 className="text-lg font-medium">Your Hand</h2>
-          <div className="flex flex-wrap gap-2">
-            {me.hand.map((card) => (
-              <button
-                key={card.id}
-                disabled={!myTurnToPlay || !legalIds.has(card.id)}
-                onClick={() =>
-                  dispatch({
-                    type: 'PLAY_CARD',
-                    playerId: HUMAN_ID,
-                    cardId: card.id,
-                  })
-                }
-                className={`rounded-xl border border-white/10 px-3 py-2 font-mono ${
-                  legalIds.has(card.id) && myTurnToPlay
-                    ? 'bg-white/10 hover:bg-white/15'
-                    : 'bg-black/20 opacity-50'
-                }`}
-              >
-                {renderSpadesCard(card)}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        {state.lastRoundResult && (
-          <section className="rounded-xl border border-white/10 bg-white/5 p-4">
-            <h2 className="text-lg font-medium">Last Round Result</h2>
-            <div className="mt-2 text-sm text-zinc-300">
-              Team 1: {state.lastRoundResult.nsScoreDelta >= 0 ? '+' : ''}{state.lastRoundResult.nsScoreDelta}
-              {' '}• Team 2: {state.lastRoundResult.ewScoreDelta >= 0 ? '+' : ''}{state.lastRoundResult.ewScoreDelta}
-              {' '}• NS Bags: +{state.lastRoundResult.nsBagsDelta}
-              {' '}• EW Bags: +{state.lastRoundResult.ewBagsDelta}
+              <div className="mt-3 flex flex-wrap gap-2">
+                {hands[playerIndex].map((card, i) =>
+                  playerIndex === 0 && phase === 'playing' && turn === 0 ? (
+                    <button key={i} onClick={() => playCard(0, i)}>
+                      <Card card={card} />
+                    </button>
+                  ) : (
+                    <Card key={i} card={card} hidden={playerIndex !== 0 && phase !== 'roundOver'} />
+                  )
+                )}
+              </div>
             </div>
-          </section>
-        )}
+          ))}
+        </div>
       </div>
     </GameShell>
   );

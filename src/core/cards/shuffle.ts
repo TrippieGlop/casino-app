@@ -1,10 +1,11 @@
-import type { RNG } from './rng';
+export function shuffleInPlace<T>(array: T[], _rng?: () => number): T[] {
+  const rand = new Uint32Array(1);
 
-// Fisher–Yates shuffle (in place)
-export function shuffleInPlace<T>(arr: T[], rng: RNG): T[] {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
+  for (let i = array.length - 1; i > 0; i--) {
+    crypto.getRandomValues(rand);
+    const j = rand[0] % (i + 1);
+    [array[i], array[j]] = [array[j], array[i]];
   }
-  return arr;
+
+  return array;
 }

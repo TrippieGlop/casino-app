@@ -12,7 +12,9 @@ export type AccentTheme =
   | 'cyan'
   | 'lime'
   | 'orange'
-  | 'pink';
+  | 'pink'
+  | 'gold'
+  | 'neon';
 
 type SessionStats = {
   wagered: number;
@@ -33,23 +35,25 @@ type AppContextType = {
   account: Account;
   difficulty: Difficulty;
   localPlay: boolean;
-  accentTheme: AccentTheme;
+  theme: AccentTheme;
   soundOn: boolean;
   readyAutoStartSeconds: number;
+  displayNameError: string;
   setDifficulty: (value: Difficulty) => void;
   setLocalPlay: (value: boolean) => void;
-  setAccentTheme: (value: AccentTheme) => void;
+  setTheme: (value: AccentTheme) => void;
   setSoundOn: (value: boolean) => void;
   setReadyAutoStartSeconds: (value: number) => void;
   setUsername: (value: string) => void;
   addChips: (amount: number) => void;
   spendChips: (amount: number) => boolean;
+  canAfford: (amount: number) => boolean;
   resetBankroll: () => void;
   recordWin: (amountWon: number, wager: number) => void;
   claimDailyRewardIfEligible: () => number;
 };
 
-const STORAGE_KEY = 'card-hub-app-state-v2';
+const STORAGE_KEY = 'card-hub-app-state-v7';
 const AppContext = createContext<AppContextType | null>(null);
 
 function todayKey() {
@@ -62,8 +66,19 @@ function yesterdayKey() {
   return d.toISOString().slice(0, 10);
 }
 
+const blockedWords = ['fuck', 'shit', 'bitch', 'asshole', 'motherfucker', 'dick', 'pussy'];
+
+function validateDisplayName(value: string) {
+  const trimmed = value.trim();
+
+  if (trimmed.length > 24) return 'Display name must be 24 characters or fewer.';
+  if (/[<>\\{}[\]|`]/.test(trimmed)) return 'Display name contains unsupported characters.';
+  if (blockedWords.some((word) => trimmed.toLowerCase().includes(word))) return 'That display name is not allowed.';
+  return '';
+}
+
 const defaultAccount: Account = {
-  username: 'Player 1',
+  username: '',
   bankroll: 1000,
   streak: 0,
   lastLoginDate: null,
@@ -74,9 +89,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [account, setAccount] = useState<Account>(defaultAccount);
   const [difficulty, setDifficulty] = useState<Difficulty>('medium');
   const [localPlay, setLocalPlay] = useState(false);
-  const [accentTheme, setAccentTheme] = useState<AccentTheme>('emerald');
+  const [theme, setTheme] = useState<AccentTheme>('emerald');
   const [soundOn, setSoundOn] = useState(true);
-  const [readyAutoStartSeconds, setReadyAutoStartSeconds] = useState(30);
+  const [readyAutoStartSeconds, setReadyAutoStartSeconds] = useState(15);
+  const [displayNameError, setDisplayNameError] = useState('');
 
   useEffect(() => {
     try {
@@ -86,7 +102,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (parsed.account) setAccount(parsed.account);
       if (parsed.difficulty) setDifficulty(parsed.difficulty);
       if (typeof parsed.localPlay === 'boolean') setLocalPlay(parsed.localPlay);
-      if (parsed.accentTheme) setAccentTheme(parsed.accentTheme);
+      if (parsed.theme) setTheme(parsed.theme);
       if (typeof parsed.soundOn === 'boolean') setSoundOn(parsed.soundOn);
       if (typeof parsed.readyAutoStartSeconds === 'number') setReadyAutoStartSeconds(parsed.readyAutoStartSeconds);
     } catch {}
@@ -99,26 +115,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         account,
         difficulty,
         localPlay,
-        accentTheme,
+        theme,
         soundOn,
         readyAutoStartSeconds,
       })
     );
-  }, [account, difficulty, localPlay, accentTheme, soundOn, readyAutoStartSeconds]);
+  }, [account, difficulty, localPlay, theme, soundOn, readyAutoStartSeconds]);
 
   const value = useMemo<AppContextType>(() => ({
     account,
     difficulty,
     localPlay,
-    accentTheme,
+    theme,
     soundOn,
     readyAutoStartSeconds,
+    displayNameError,
     setDifficulty,
     setLocalPlay,
-    setAccentTheme,
+    setTheme,
     setSoundOn,
     setReadyAutoStartSeconds,
-    setUsername: (value) => setAccount((a) => ({ ...a, username: value || 'Player 1' })),
+    setUsername: (value) => {
+      const error = validateDisplayName(value);
+      if (error) {
+        setDisplayNameError(error);
+        return;
+      }
+      setDisplayNameError('');
+      setAccount((a) => ({ ...a, username: value }));
+    },
     addChips: (amount) =>
       setAccount((a) => ({ ...a, bankroll: a.bankroll + Math.max(0, amount) })),
     spendChips: (amount) => {
@@ -136,6 +161,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }));
       return true;
     },
+    canAfford: (amount) => account.bankroll >= Math.max(0, amount),
     resetBankroll: () =>
       setAccount((a) => ({
         ...a,
@@ -156,8 +182,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       let reward = 0;
       setAccount((a) => {
         const today = todayKey();
-        if (a.lastLoginDate == today) return a;
-        const streak = a.lastLoginDate == yesterdayKey() ? a.streak + 1 : 1;
+        if (a.lastLoginDate === today) return a;
+        const streak = a.lastLoginDate === yesterdayKey() ? a.streak + 1 : 1;
         reward = 100 + (streak - 1) * 25;
         return {
           ...a,
@@ -168,7 +194,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
       return reward;
     },
-  }), [account, difficulty, localPlay, accentTheme, soundOn, readyAutoStartSeconds]);
+  }), [account, difficulty, localPlay, theme, soundOn, readyAutoStartSeconds, displayNameError]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

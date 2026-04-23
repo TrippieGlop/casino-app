@@ -17,7 +17,7 @@ export function ModeControl() {
       <div className="text-sm font-medium text-zinc-200">Session Settings</div>
 
       <label className="flex items-center justify-between gap-3 rounded-xl bg-zinc-900 px-3 py-2 text-sm text-zinc-200">
-        <span>Local Play</span>
+        <span>Multiplayer Table</span>
         <input
           type="checkbox"
           checked={localPlay}
@@ -35,10 +35,10 @@ export function ModeControl() {
       </label>
 
       <label className="grid gap-2 rounded-xl bg-zinc-900 px-3 py-2 text-sm text-zinc-200">
-        <span>Auto-start Timer (Blackjack table)</span>
+        <span>Auto-start Timer</span>
         <input
           type="range"
-          min={10}
+          min={5}
           max={30}
           step={5}
           value={readyAutoStartSeconds}

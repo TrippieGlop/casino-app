@@ -1,0 +1,410 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { GameShell } from '@/components/app/GameShell';
+import { TurnBanner } from '@/components/ui/TurnBanner';
+import { ActionLog } from '@/components/ui/ActionLog';
+import { Card } from '@/components/ui/Card';
+import { useAppSettings } from '@/components/app/AppProvider';
+
+type Player = {
+  id: string;
+  name: string;
+  folded: boolean;
+  acted: boolean;
+  chips: number;
+  bet: number;
+  cards: string[];
+  isCpu: boolean;
+  ready: boolean;
+};
+
+type Suit = '♠' | '♥' | '♦' | '♣';
+type Rank = '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A';
+
+const RANKS: Rank[] = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+const SUITS: Suit[] = ['♠', '♥', '♦', '♣'];
+
+function makeDeck(): string[] {
+  const deck: string[] = [];
+  for (const s of SUITS) {
+    for (const r of RANKS) deck.push(`${r}${s}`);
+  }
+  for (let i = deck.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+  return deck;
+}
+
+function nextActiveIndex(players: Player[], current: number): number {
+  const live = players.filter((p) => !p.folded);
+  if (live.length <= 1) return -1;
+  let i = current;
+  for (let step = 0; step < players.length; step += 1) {
+    i = (i + 1) % players.length;
+    if (!players[i].folded) return i;
+  }
+  return -1;
+}
+
+function allMatchedAndActed(players: Player[], currentBet: number): boolean {
+  return players.filter((p) => !p.folded).every((p) => p.acted && p.bet === currentBet);
+}
+
+function scoreCard(card: string): number {
+  const rank = card.slice(0, -1) as Rank;
+  return RANKS.indexOf(rank) + 2;
+}
+
+function bestScore(cards: string[]): number {
+  return Math.max(...cards.map(scoreCard));
+}
+
+function parseCard(card: string): { rank: Rank; suit: Suit } {
+  const suit = card.slice(-1) as Suit;
+  const rank = card.slice(0, -1) as Rank;
+  return { rank, suit };
+}
+
+export default function PokerPage() {
+  const { account } = useAppSettings();
+  const displayName = account.username.trim() || 'Guest';
+
+  const [players, setPlayers] = useState<Player[]>([
+    { id: 'p1', name: displayName, folded: false, acted: false, chips: 500, bet: 0, cards: [], isCpu: false, ready: false },
+    { id: 'p2', name: 'CPU 1', folded: false, acted: false, chips: 500, bet: 0, cards: [], isCpu: true, ready: true },
+    { id: 'p3', name: 'CPU 2', folded: false, acted: false, chips: 500, bet: 0, cards: [], isCpu: true, ready: true },
+  ]);
+
+  const [deck, setDeck] = useState<string[]>([]);
+  const [board, setBoard] = useState<string[]>([]);
+  const [turnIndex, setTurnIndex] = useState(0);
+  const [pot, setPot] = useState(0);
+  const [currentBet, setCurrentBet] = useState(20);
+  const [raiseAmount, setRaiseAmount] = useState(20);
+  const [street, setStreet] = useState<'idle' | 'preflop' | 'flop' | 'turn' | 'river' | 'showdown'>('idle');
+  const [roundActive, setRoundActive] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [status, setStatus] = useState('Ready up and the next hand will begin automatically.');
+  const [secondsLeft, setSecondsLeft] = useState(10);
+
+  useEffect(() => {
+    setPlayers((prev) => prev.map((p, i) => i === 0 ? { ...p, name: displayName } : p));
+  }, [displayName]);
+
+  const activePlayer = players[turnIndex];
+  const everyoneReady = players.length >= 2 && players.every((p) => p.ready);
+
+  function addLog(text: string) {
+    setLogs((prev) => [text, ...prev].slice(0, 12));
+  }
+
+  function addCpu() {
+    if (roundActive) return;
+    setPlayers((prev) => [
+      ...prev,
+      {
+        id: `p${Date.now()}`,
+        name: `CPU ${prev.filter((p) => p.isCpu).length + 1}`,
+        folded: false,
+        acted: false,
+        chips: 500,
+        bet: 0,
+        cards: [],
+        isCpu: true,
+        ready: true,
+      },
+    ]);
+  }
+
+  function removeCpu() {
+    if (roundActive) return;
+    const cpuPlayers = players.filter((p) => p.isCpu);
+    if (cpuPlayers.length <= 1) return;
+    const remove = cpuPlayers[cpuPlayers.length - 1];
+    setPlayers((prev) => prev.filter((p) => p.id !== remove.id));
+  }
+
+  function resetForNextHand() {
+    setDeck([]);
+    setBoard([]);
+    setTurnIndex(0);
+    setPot(0);
+    setCurrentBet(20);
+    setStreet('idle');
+    setRoundActive(false);
+    setPlayers((prev) =>
+      prev.map((p) => ({
+        ...p,
+        folded: false,
+        acted: false,
+        bet: 0,
+        cards: [],
+      }))
+    );
+  }
+
+  function startHand() {
+    const shuffled = makeDeck();
+    const nextPlayers = players.map((p) => ({
+      ...p,
+      folded: false,
+      acted: false,
+      bet: 0,
+      cards: [shuffled.shift()!, shuffled.shift()!],
+    }));
+
+    nextPlayers[0].bet = 10;
+    nextPlayers[0].chips -= 10;
+    nextPlayers[1].bet = 20;
+    nextPlayers[1].chips -= 20;
+
+    setPlayers(nextPlayers);
+    setDeck(shuffled);
+    setBoard([]);
+    setPot(30);
+    setCurrentBet(20);
+    setTurnIndex(2 % nextPlayers.length);
+    setStreet('preflop');
+    setRoundActive(true);
+    setStatus('Preflop action.');
+    addLog('New hand started.');
+  }
+
+  function endHand(message: string, logText: string, updatedPlayers: Player[], nextBoard?: string[]) {
+    setPlayers(updatedPlayers);
+    if (nextBoard) setBoard(nextBoard);
+    setRoundActive(false);
+    setStreet('showdown');
+    setStatus(message);
+    addLog(logText);
+    setSecondsLeft(8);
+  }
+
+  function goToNextStreet(nextPlayers: Player[], nextDeck: string[]) {
+    let nextBoard = [...board];
+    let nextStreet = street;
+
+    if (street === 'preflop') {
+      nextBoard = [nextDeck.shift()!, nextDeck.shift()!, nextDeck.shift()!];
+      nextStreet = 'flop';
+    } else if (street === 'flop') {
+      nextBoard = [...nextBoard, nextDeck.shift()!];
+      nextStreet = 'turn';
+    } else if (street === 'turn') {
+      nextBoard = [...nextBoard, nextDeck.shift()!];
+      nextStreet = 'river';
+    } else {
+      nextStreet = 'showdown';
+    }
+
+    if (nextStreet === 'showdown') {
+      const live = nextPlayers.filter((p) => !p.folded);
+      const winner = live.reduce((best, p) =>
+        bestScore([...p.cards, ...nextBoard]) > bestScore([...best.cards, ...nextBoard]) ? p : best
+      );
+      const updated = nextPlayers.map((p) => p.id === winner.id ? { ...p, chips: p.chips + pot } : p);
+      endHand(`${winner.name} wins the pot of $${pot}.`, `${winner.name} wins the showdown.`, updated, nextBoard);
+      return;
+    }
+
+    const reset = nextPlayers.map((p) => ({ ...p, acted: false, bet: 0 }));
+    setPlayers(reset);
+    setBoard(nextBoard);
+    setDeck(nextDeck);
+    setStreet(nextStreet);
+    setCurrentBet(0);
+    setTurnIndex(reset.findIndex((p) => !p.folded));
+    setStatus(`${nextStreet.toUpperCase()} action.`);
+    addLog(`${nextStreet.toUpperCase()} dealt.`);
+  }
+
+  function finalizeAction(nextPlayers: Player[]) {
+    const live = nextPlayers.filter((p) => !p.folded);
+    if (live.length === 1) {
+      const winner = live[0];
+      const updated = nextPlayers.map((p) => p.id === winner.id ? { ...p, chips: p.chips + pot } : p);
+      endHand(`${winner.name} wins because everyone folded.`, `${winner.name} wins the pot.`, updated);
+      return;
+    }
+
+    if (allMatchedAndActed(nextPlayers, currentBet)) {
+      goToNextStreet(nextPlayers, [...deck]);
+      return;
+    }
+
+    const next = nextActiveIndex(nextPlayers, turnIndex);
+    if (next >= 0) {
+      setPlayers(nextPlayers);
+      setTurnIndex(next);
+    }
+  }
+
+  function act(action: 'fold' | 'check' | 'call' | 'raise') {
+    if (!roundActive) return;
+    const nextPlayers = players.map((p) => ({ ...p }));
+    const current = nextPlayers[turnIndex];
+    if (!current || current.folded) return;
+
+    if (action === 'fold') {
+      nextPlayers[turnIndex] = { ...current, folded: true, acted: true };
+      addLog(`${current.name} folds.`);
+      finalizeAction(nextPlayers);
+      return;
+    }
+
+    if (action === 'check') {
+      if (current.bet !== currentBet) return;
+      nextPlayers[turnIndex] = { ...current, acted: true };
+      addLog(`${current.name} checks.`);
+      finalizeAction(nextPlayers);
+      return;
+    }
+
+    if (action === 'call') {
+      const owed = Math.max(0, currentBet - current.bet);
+      const pay = Math.min(owed, current.chips);
+      nextPlayers[turnIndex] = {
+        ...current,
+        chips: current.chips - pay,
+        bet: current.bet + pay,
+        acted: true,
+      };
+      setPot((prev) => prev + pay);
+      addLog(`${current.name} calls $${pay}.`);
+      finalizeAction(nextPlayers);
+      return;
+    }
+
+    const nextBet = currentBet + raiseAmount;
+    const owed = Math.max(0, nextBet - current.bet);
+    const pay = Math.min(owed, current.chips);
+    nextPlayers[turnIndex] = {
+      ...current,
+      chips: current.chips - pay,
+      bet: current.bet + pay,
+      acted: true,
+    };
+    for (let i = 0; i < nextPlayers.length; i += 1) {
+      if (i !== turnIndex && !nextPlayers[i].folded) nextPlayers[i].acted = false;
+    }
+    setCurrentBet(nextBet);
+    setPot((prev) => prev + pay);
+    addLog(`${current.name} raises to $${nextBet}.`);
+    finalizeAction(nextPlayers);
+  }
+
+  useEffect(() => {
+    if (!roundActive) return;
+    if (!activePlayer || !activePlayer.isCpu || activePlayer.folded) return;
+
+    const timer = setTimeout(() => {
+      const owed = currentBet - activePlayer.bet;
+      const strong = activePlayer.cards.filter((c) => scoreCard(c) >= 10).length;
+      if (owed > 0 && strong === 0) act('fold');
+      else if (owed > 0) act('call');
+      else act('check');
+    }, 700);
+
+    return () => clearTimeout(timer);
+  }, [roundActive, activePlayer, currentBet, turnIndex, players]);
+
+  useEffect(() => {
+    if (roundActive || !everyoneReady) return;
+    setSecondsLeft(10);
+    const timer = setInterval(() => {
+      setSecondsLeft((prev) => prev - 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [roundActive, everyoneReady, players]);
+
+  useEffect(() => {
+    if (roundActive || !everyoneReady) return;
+    if (secondsLeft > 0) return;
+    resetForNextHand();
+    startHand();
+  }, [secondsLeft, roundActive, everyoneReady]);
+
+  return (
+    <GameShell
+      title="Poker"
+      subtitle="Continuous poker table with the same normal card UI used by the other games."
+    >
+      <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+            <div className="mb-3 text-lg font-semibold">Community Cards</div>
+            <div className="flex flex-wrap gap-2">
+              {board.length ? board.map((card, i) => <Card key={i} card={parseCard(card)} />) : <div className="text-sm text-zinc-400">No board cards yet.</div>}
+            </div>
+            <div className="mt-3 text-sm text-zinc-300">Pot: ${pot} • Current bet: ${currentBet}</div>
+          </div>
+
+          <ActionLog items={logs} />
+
+          <TurnBanner
+            title={roundActive ? `${activePlayer?.name || 'Table'} to act` : `Next hand in ${secondsLeft}s`}
+            subtitle={status}
+          />
+        </div>
+
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-lg font-semibold">Active Seats</div>
+              <div className="flex gap-2">
+                <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={addCpu} disabled={roundActive}>Add CPU</button>
+                <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={removeCpu} disabled={roundActive}>Remove CPU</button>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {players.map((player, idx) => (
+                <div key={player.id} className="rounded-xl border border-white/10 bg-black/20 p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-semibold">{player.name}</div>
+                      <div className="mt-1 text-sm text-zinc-400">
+                        Chips: ${player.chips} • Bet: ${player.bet} {player.folded ? '• Folded' : ''}
+                      </div>
+                    </div>
+                    <button
+                      className={`rounded-lg px-3 py-2 text-sm ${player.ready ? 'bg-emerald-500 text-black' : 'bg-zinc-800 text-white'}`}
+                      onClick={() => setPlayers((prev) => prev.map((p, i) => i === idx ? { ...p, ready: !p.ready } : p))}
+                      disabled={roundActive}
+                    >
+                      {player.ready ? 'Ready' : 'Unready'}
+                    </button>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {player.cards.length ? player.cards.map((c, i) => (
+                      <Card key={i} card={parseCard(c)} hidden={idx !== 0 && street !== 'showdown'} />
+                    )) : <div className="text-sm text-zinc-400">No cards dealt yet</div>}
+                  </div>
+
+                  {idx === 0 && (
+                    <div className="mt-4 space-y-3">
+                      <div>
+                        <div className="mb-2 text-sm text-zinc-300">Raise amount: ${raiseAmount}</div>
+                        <input className="w-full" type="range" min={20} max={200} step={10} value={raiseAmount} onChange={(e) => setRaiseAmount(Number(e.target.value))} />
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={() => act('fold')} disabled={!roundActive || turnIndex !== 0}>Fold</button>
+                        <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={() => act('check')} disabled={!roundActive || turnIndex !== 0}>Check</button>
+                        <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={() => act('call')} disabled={!roundActive || turnIndex !== 0}>Call</button>
+                        <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={() => act('raise')} disabled={!roundActive || turnIndex !== 0}>Raise</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </GameShell>
+  );
+}

@@ -1,7 +1,16 @@
 import './globals.css';
 import { AppProvider } from '@/components/app/AppProvider';
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export const metadata = {
+  title: 'Card Hub',
+  description: 'Card Hub casino-style card games',
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
     <html lang="en">
       <body>
