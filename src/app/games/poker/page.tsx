@@ -7,6 +7,7 @@ import { ActionLog } from '@/components/ui/ActionLog';
 import { Card } from '@/components/ui/Card';
 import { useAppSettings } from '@/components/app/AppProvider';
 import { useSharedRoom } from '@/hooks/useSharedRoom';
+import { useAccentGlow } from '@/hooks/useAccentGlow';
 
 type Suit = '♠' | '♥' | '♦' | '♣';
 type Rank = '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A';
@@ -182,6 +183,7 @@ export default function PokerPage() {
   } = useAppSettings();
 
   const displayName = account.username.trim() || 'Guest';
+  const accentGlow = useAccentGlow();
   const multiplayer = !!localPlay;
 
   const playerIdRef = useRef('');
@@ -852,7 +854,7 @@ export default function PokerPage() {
       title="Poker"
       subtitle={multiplayer ? 'Online poker with spectators, ready-yourself-only flow, and synchronized 20 second table timing.' : 'Solo poker with local bots you can add or remove freely.'}
     >
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+      <div style={{ '--accent-glow': accentGlow } as any} className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
         <div className="space-y-4">
           <WagerStylePanel
             chips={account.bankroll}
@@ -885,7 +887,7 @@ export default function PokerPage() {
             }
           />
 
-          <div className="rounded-[2rem] border border-white/10 p-6 shadow-2xl" style={{ background: 'radial-gradient(circle at center, var(--accent-glow, rgba(20,83,45,0.28)), rgba(9,9,11,1) 72%)' }}>
+          <div className="rounded-[2rem] border border-white/10 p-6 shadow-2xl" style={{ '--accent-glow': accentGlow, background: 'radial-gradient(circle at center, var(--accent-glow), rgba(9,9,11,1) 72%)' } as any}>
             <section>
               <h2 className="text-lg font-medium text-zinc-200">Community Cards</h2>
               <div className="mt-3 flex flex-wrap gap-3">

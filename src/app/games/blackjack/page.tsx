@@ -7,6 +7,7 @@ import { ActionLog } from '@/components/ui/ActionLog';
 import { Card } from '@/components/ui/Card';
 import { useAppSettings } from '@/components/app/AppProvider';
 import { useSharedRoom } from '@/hooks/useSharedRoom';
+import { useAccentGlow } from '@/hooks/useAccentGlow';
 
 type Suit = '♠' | '♥' | '♦' | '♣';
 type Rank = '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A';
@@ -183,6 +184,24 @@ function hasPlayableHands<T extends { hands: HandState[] }>(seat: T) {
   return seat.hands.some((hand) => !hand.finished);
 }
 
+
+function chipButton(amount: number, current: number, onClick: () => void, label?: string) {
+  const active = amount === current;
+  return (
+    <button
+      key={`${label || 'chip'}-${amount}`}
+      className={`rounded-xl border px-4 py-3 text-sm font-medium transition ${
+        active
+          ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
+          : 'border-white/10 bg-zinc-900 text-zinc-100 hover:bg-zinc-800'
+      }`}
+      onClick={onClick}
+    >
+      {label ? `${label} $${amount}` : `$${amount}`}
+    </button>
+  );
+}
+
 function WagerPanel({
   bankroll,
   wager,
@@ -190,6 +209,10 @@ function WagerPanel({
   onJoin,
   joinLabel,
   helper,
+  pairBet,
+  threeBet,
+  setPairBet,
+  setThreeBet,
 }: {
   bankroll: number;
   wager: number;
@@ -197,6 +220,10 @@ function WagerPanel({
   onJoin?: () => void;
   joinLabel?: string;
   helper: string;
+  pairBet: number;
+  threeBet: number;
+  setPairBet: (n: number) => void;
+  setThreeBet: (n: number) => void;
 }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
@@ -234,6 +261,21 @@ function WagerPanel({
         })}
       </div>
 
+      <div className="mt-5 grid gap-4 lg:grid-cols-2">
+        <div>
+          <div className="mb-2 text-sm text-zinc-300">Perfect Pairs</div>
+          <div className="flex flex-wrap gap-2">
+            {SIDE_OPTIONS.map((amount) => chipButton(amount, pairBet, () => setPairBet(amount), 'Perfect Pairs'))}
+          </div>
+        </div>
+        <div>
+          <div className="mb-2 text-sm text-zinc-300">21+3</div>
+          <div className="flex flex-wrap gap-2">
+            {SIDE_OPTIONS.map((amount) => chipButton(amount, threeBet, () => setThreeBet(amount), '21+3'))}
+          </div>
+        </div>
+      </div>
+
       <div className="mt-4 text-sm text-zinc-300">{helper}</div>
     </div>
   );
@@ -251,7 +293,7 @@ function SideBets({
   setThreeBet: (n: number) => void;
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-[0_0_38px_var(--accent-glow)]">
       <div className="mb-4 text-lg font-semibold">Side Bets</div>
 
       <div className="mb-4">
@@ -303,7 +345,7 @@ function SideBets({
 
 function PayoutChart() {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-[0_0_38px_var(--accent-glow)]">
       <div className="mb-3 text-lg font-semibold">Payout Chart</div>
       <div className="space-y-2 text-sm text-zinc-300">
         {payoutRows().map((row) => (
@@ -348,7 +390,9 @@ export default function BlackjackPage() {
   } = useAppSettings();
 
   const displayName = account.username.trim() || 'Guest';
-  const multiplayer = !!localPlay;
+  const accentGlow = useAccentGlow();
+
+    const multiplayer = !!localPlay;
   const soloTimerSetting = readyAutoStartSeconds || 15;
 
   const playerIdRef = useRef('');
@@ -1022,7 +1066,7 @@ export default function BlackjackPage() {
       title="Blackjack"
       subtitle={multiplayer ? 'Compact table layout with player actions inside your seat, clearer status, and continuous round flow.' : 'Solo blackjack with CPU support, side bets, and your own timing settings.'}
     >
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+      <div style={{ '--accent-glow': accentGlow } as any} className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
         <div className="space-y-4">
           <WagerPanel
             bankroll={account.bankroll}
@@ -1035,6 +1079,10 @@ export default function BlackjackPage() {
                 ? `Main $${multiWager} • Perfect Pairs $${multiPairBet} • 21+3 $${multiThreeBet}`
                 : `Main $${soloWager} • Perfect Pairs $${soloPairBet} • 21+3 $${soloThreeBet}`
             }
+            pairBet={multiplayer ? multiPairBet : soloPairBet}
+            threeBet={multiplayer ? multiThreeBet : soloThreeBet}
+            setPairBet={multiplayer ? setMultiPairBet : setSoloPairBet}
+            setThreeBet={multiplayer ? setMultiThreeBet : setSoloThreeBet}
           />
 
           <TurnBanner
@@ -1058,7 +1106,7 @@ export default function BlackjackPage() {
             }
           />
 
-          <div className="rounded-[2rem] border border-white/10 p-6 shadow-2xl" style={{ background: "radial-gradient(circle at center, var(--accent-glow, rgba(20,83,45,0.35)), rgba(9,9,11,1) 72%)" }}>
+          <div className="rounded-[2rem] border border-white/10 p-6 shadow-2xl" style={{ background: "radial-gradient(circle at center, var(--accent-glow, var(--accent-glow)), rgba(9,9,11,1) 72%)" }}>
             <section>
               <h2 className="text-lg font-medium text-zinc-200">Dealer</h2>
               <div className="mt-3 flex flex-wrap gap-3">
@@ -1074,12 +1122,12 @@ export default function BlackjackPage() {
 
 
           <div className="grid gap-4 lg:grid-cols-2">
-            <SideBets
-              pairBet={multiplayer ? multiPairBet : soloPairBet}
-              threeBet={multiplayer ? multiThreeBet : soloThreeBet}
-              setPairBet={multiplayer ? setMultiPairBet : setSoloPairBet}
-              setThreeBet={multiplayer ? setMultiThreeBet : setSoloThreeBet}
-            />
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-[0_0_38px_var(--accent-glow)]">
+              <div className="font-semibold">Action Log</div>
+              <div className="mt-3">
+                <ActionLog items={multiplayer ? logs : soloLogs} />
+              </div>
+            </div>
             <PayoutChart />
           </div>              <p className="mt-3 text-sm text-zinc-300">
                 {(multiplayer ? phase : soloPhase) === 'player'
@@ -1093,7 +1141,7 @@ export default function BlackjackPage() {
         <div className="space-y-4">
           {!multiplayer ? (
             <>
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-[0_0_38px_var(--accent-glow)]">
                 <div className="mb-3 flex items-center justify-between">
                   <div className="text-lg font-semibold">Active Seats</div>
                   <div className="flex gap-2">
@@ -1143,17 +1191,10 @@ export default function BlackjackPage() {
                   ))}
                 </div>
               </div>
-
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="font-semibold">Action Log</div>
-                <div className="mt-3">
-                  <ActionLog items={soloLogs} />
-                </div>
-              </div>
             </>
           ) : (
             <>
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-[0_0_38px_var(--accent-glow)]">
                 <div className="mb-3 text-lg font-semibold">Active Seats</div>
                 <div className="space-y-3">
                   {seats.map((seat, idx) => (
@@ -1206,14 +1247,7 @@ export default function BlackjackPage() {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="font-semibold">Action Log</div>
-                <div className="mt-3">
-                  <ActionLog items={logs} />
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-[0_0_38px_var(--accent-glow)]">
                 <div className="font-semibold">Spectators</div>
                 <div className="mt-2 text-sm text-zinc-400">
                   {spectators.length ? spectators.map((s) => s.name).join(', ') : 'No spectators'}

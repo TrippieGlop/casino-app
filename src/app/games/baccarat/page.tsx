@@ -7,6 +7,7 @@ import { ActionLog } from '@/components/ui/ActionLog';
 import { Card } from '@/components/ui/Card';
 import { useAppSettings } from '@/components/app/AppProvider';
 import { useSharedRoom } from '@/hooks/useSharedRoom';
+import { useAccentGlow } from '@/hooks/useAccentGlow';
 
 type Suit = '♠' | '♥' | '♦' | '♣';
 type Rank = 'A' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K';
@@ -254,10 +255,11 @@ export default function BaccaratPage() {
   } = useAppSettings();
 
   const displayName = account.username.trim() || 'Guest';
+  const accentGlow = useAccentGlow();
   const multiplayer = !!localPlay;
 
   const baccaratBoxThemeStyle = {
-    background: 'radial-gradient(circle at center, var(--accent-glow, rgba(20,83,45,0.28)), rgba(9,9,11,1) 72%)',
+    background: 'radial-gradient(circle at center, var(--accent-glow, var(--accent-glow, var(--accent-glow))), rgba(9,9,11,1) 72%)',
   };
 
   const playerIdRef = useRef('');
@@ -416,7 +418,7 @@ export default function BaccaratPage() {
       withLog(
         {
           ...sharedState,
-          seats: seats.filter((_, i) => i !== mySeatIndex),
+          seats: seats.filter((s) => s.playerId !== playerId),
           spectators: spectators.some((s) => s.playerId === playerId)
             ? spectators
             : [...spectators, { playerId, name: displayName }],
@@ -540,6 +542,54 @@ export default function BaccaratPage() {
     processedRoundRef.current = roundId;
   }, [multiplayer, roundId, mySeatIndex, seats, playerTotal, bankerTotal, playerHand, bankerHand]);
 
+  useEffect(() => {
+    if (!multiplayer) return;
+    const cleanup = () => {
+      try {
+        if (mySeatIndex >= 0) leaveSeat();
+      } catch {}
+    };
+    window.addEventListener('pagehide', cleanup);
+    window.addEventListener('beforeunload', cleanup);
+    return () => {
+      window.removeEventListener('pagehide', cleanup);
+      window.removeEventListener('beforeunload', cleanup);
+      cleanup();
+    };
+  }, [multiplayer, mySeatIndex, seats]);
+
+  // baccaratLeaveCleanupInstalled
+  useEffect(() => {
+    if (!multiplayer) return;
+
+    const cleanup = () => {
+      try {
+        const currentSeats = Array.isArray(sharedState?.seats) ? sharedState.seats : [];
+        const currentSpectators = Array.isArray(sharedState?.spectators) ? sharedState.spectators : [];
+        if (!currentSeats.some((s) => s.playerId === playerId)) return;
+
+        pushState({
+          ...sharedState,
+          seats: currentSeats.filter((s) => s.playerId !== playerId),
+          spectators: currentSpectators.some((s) => s.playerId === playerId)
+            ? currentSpectators
+            : [...currentSpectators, { playerId, name: displayName }],
+          status: `${displayName} left the table.`,
+          logs: [`${displayName} left the table.`, ...(Array.isArray(sharedState?.logs) ? sharedState.logs : [])].slice(0, 14),
+        });
+      } catch {}
+    };
+
+    window.addEventListener('pagehide', cleanup);
+    window.addEventListener('beforeunload', cleanup);
+
+    return () => {
+      window.removeEventListener('pagehide', cleanup);
+      window.removeEventListener('beforeunload', cleanup);
+      cleanup();
+    };
+  }, [multiplayer, sharedState, playerId, displayName, pushState]);
+
   const title = multiplayer ? 'Baccarat' : 'Baccarat';
   const subtitle = multiplayer
     ? 'Online table with human-only seats, synchronized 20 second dealing, and spectator support.'
@@ -547,7 +597,7 @@ export default function BaccaratPage() {
 
   return (
     <GameShell title={title} subtitle={subtitle}>
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+      <div style={{ '--accent-glow': accentGlow } as any} className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
         <div className="space-y-4">
           <WagerPanel
             bankroll={account.bankroll}

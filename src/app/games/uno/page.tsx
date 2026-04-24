@@ -2,725 +2,764 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { GameShell } from '@/components/app/GameShell';
-import { BettingPanel } from '@/components/app/BettingPanel';
 import { TurnBanner } from '@/components/ui/TurnBanner';
 import { ActionLog } from '@/components/ui/ActionLog';
-import { UnoStyleCard } from '@/components/ui/UnoStyleCard';
 import { useAppSettings } from '@/components/app/AppProvider';
 import { useSharedRoom } from '@/hooks/useSharedRoom';
 
-type UnoColor = 'red' | 'blue' | 'green' | 'yellow';
-type UnoCard = { color: UnoColor; value: number };
+type UnoColor = 'red' | 'yellow' | 'green' | 'blue' | 'wild';
+type UnoValue = '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '+2' | '+4' | 'R' | 'S' | 'W';
 
-type MultiSeat = {
+type UnoCard = {
+  id: string;
+  color: UnoColor;
+  value: UnoValue;
+  chosenColor?: Exclude<UnoColor, 'wild'>;
+};
+
+type Seat = {
   id: string;
   playerId: string | null;
   name: string;
-  isHuman: boolean;
   cards: UnoCard[];
   ready: boolean;
-  bankrollPaid: boolean;
-  forfeited: boolean;
+  agreedWager: number;
+  isBot?: boolean;
 };
 
-type Spectator = {
-  playerId: string;
-  name: string;
-};
-
-type MultiState = {
-  seats: MultiSeat[];
-  spectators: Spectator[];
+type UnoState = {
+  seats: Seat[];
+  spectators: Array<{ playerId: string; name: string }>;
   deck: UnoCard[];
   discard: UnoCard[];
+  currentColor: Exclude<UnoColor, 'wild'>;
   turn: number;
-  wager: number;
-  pot: number;
+  direction: 1 | -1;
+  drawStack: number;
   started: boolean;
+  timer: number;
   logs: string[];
   status: string;
+  wager: number;
+  pot: number;
 };
 
-const MAX_MULTIPLAYER_SEATS = 6;
-const MULTI_READY_SECONDS = 15;
+const COLORS: Exclude<UnoColor, 'wild'>[] = ['red', 'yellow', 'green', 'blue'];
+const VALUES: UnoValue[] = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '+2', 'R', 'S'];
+const TIMER = 15;
 
 function makeDeck(): UnoCard[] {
-  const colors: UnoColor[] = ['red', 'blue', 'green', 'yellow'];
   const deck: UnoCard[] = [];
-  for (const color of colors) {
-    for (let i = 0; i < 10; i += 1) {
-      deck.push({ color, value: i });
-      deck.push({ color, value: i });
+
+  for (const color of COLORS) {
+    for (const value of VALUES) {
+      deck.push({ id: `${color}-${value}-${Math.random().toString(36).slice(2, 9)}`, color, value });
+      if (value !== '0') {
+        deck.push({ id: `${color}-${value}-${Math.random().toString(36).slice(2, 9)}`, color, value });
+      }
     }
   }
+
+  for (let i = 0; i < 4; i += 1) {
+    deck.push({ id: `wild-${i}-${Math.random().toString(36).slice(2, 9)}`, color: 'wild', value: 'W' });
+    deck.push({ id: `wild4-${i}-${Math.random().toString(36).slice(2, 9)}`, color: 'wild', value: '+4' });
+  }
+
   for (let i = deck.length - 1; i > 0; i -= 1) {
     const j = Math.floor(Math.random() * (i + 1));
     [deck[i], deck[j]] = [deck[j], deck[i]];
   }
+
   return deck;
 }
 
-function canPlay(card: UnoCard, top: UnoCard): boolean {
-  return card.color === top.color || card.value === top.value;
+function drawCards(deck: UnoCard[], count: number) {
+  const nextDeck = [...deck];
+  const drawn: UnoCard[] = [];
+  for (let i = 0; i < count && nextDeck.length; i += 1) {
+    drawn.push(nextDeck.shift()!);
+  }
+  return { nextDeck, drawn };
 }
 
-function makeInitialMultiState(): MultiState {
+function nextTurnIndex(seats: Seat[], current: number, direction: 1 | -1, skip = 1) {
+  if (!seats.length) return 0;
+  let idx = current;
+  for (let i = 0; i < skip; i += 1) {
+    idx = (idx + direction + seats.length) % seats.length;
+  }
+  return idx;
+}
+
+function isDrawCard(card: UnoCard) {
+  return card.value === '+2' || card.value === '+4';
+}
+
+function isWild(card: UnoCard) {
+  return card.color === 'wild' || card.value === 'W' || card.value === '+4';
+}
+
+function canPlay(card: UnoCard, top: UnoCard | undefined, currentColor: Exclude<UnoColor, 'wild'>, drawStack: number) {
+  if (drawStack > 0) {
+    return top?.value === '+2' && card.value === '+2';
+  }
+  if (!top) return true;
+  if (isWild(card)) return true;
+  return card.color === currentColor || card.value === top.value;
+}
+
+function displayValue(card: UnoCard) {
+  if (card.value === 'W') return 'WILD';
+  if (card.value === 'R') return 'REV';
+  if (card.value === 'S') return 'SKIP';
+  return card.value;
+}
+
+function cardClass(card: UnoCard) {
+  if (isWild(card)) return 'bg-zinc-950 text-white border-white/30';
+  if (card.color === 'red') return 'bg-red-600 text-white border-red-300/50';
+  if (card.color === 'yellow') return 'bg-yellow-400 text-black border-yellow-100/80';
+  if (card.color === 'green') return 'bg-green-600 text-white border-green-300/50';
+  if (card.color === 'blue') return 'bg-blue-600 text-white border-blue-300/50';
+  return 'bg-zinc-900 text-white border-white/10';
+}
+
+function UnoCardView({
+  card,
+  small = false,
+  onClick,
+  disabled,
+  hidden = false,
+}: {
+  card: UnoCard;
+  small?: boolean;
+  onClick?: () => void;
+  disabled?: boolean;
+  hidden?: boolean;
+}) {
+  if (hidden) {
+    return (
+      <button
+        disabled
+        className={`${small ? 'h-20 w-14 text-xs' : 'h-28 w-20 text-base'} rounded-2xl border border-white/20 bg-zinc-950 p-2 font-black text-white shadow-lg`}
+      >
+        <div className="flex h-full items-center justify-center rounded-xl border border-white/15 bg-gradient-to-br from-zinc-900 to-black">
+          UNO
+        </div>
+      </button>
+    );
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled || !onClick}
+      className={`${small ? 'h-20 w-14 text-sm' : 'h-28 w-20 text-lg'} ${cardClass(card)} relative overflow-hidden rounded-2xl border p-2 font-black shadow-lg transition hover:-translate-y-1 disabled:cursor-not-allowed disabled:opacity-50`}
+    >
+      <div className="absolute inset-2 rounded-full bg-white/20 blur-sm" />
+      <div className="absolute left-2 top-2 text-xs drop-shadow">{displayValue(card)}</div>
+      <div className="relative flex h-full items-center justify-center rounded-full bg-white/20 px-2 text-center drop-shadow">
+        {displayValue(card)}
+      </div>
+      <div className="absolute bottom-2 right-2 rotate-180 text-xs drop-shadow">{displayValue(card)}</div>
+      {isWild(card) ? (
+        <div className="absolute inset-x-2 bottom-7 flex justify-center gap-1">
+          <span className="h-2 w-2 rounded-full bg-red-500" />
+          <span className="h-2 w-2 rounded-full bg-yellow-400" />
+          <span className="h-2 w-2 rounded-full bg-green-500" />
+          <span className="h-2 w-2 rounded-full bg-blue-500" />
+        </div>
+      ) : null}
+    </button>
+  );
+}
+
+function initialState(): UnoState {
   return {
-    seats: [
-      { id: 'seat-1', playerId: null, name: 'Open Seat', isHuman: true, cards: [], ready: false, bankrollPaid: false, forfeited: false },
-      { id: 'seat-2', playerId: null, name: 'Open Seat', isHuman: true, cards: [], ready: false, bankrollPaid: false, forfeited: false },
-    ],
+    seats: [],
     spectators: [],
     deck: [],
     discard: [],
+    currentColor: 'red',
     turn: 0,
+    direction: 1,
+    drawStack: 0,
+    started: false,
+    timer: TIMER,
+    logs: [],
+    status: 'Join a seat and ready up.',
     wager: 25,
     pot: 0,
-    started: false,
-    logs: [],
-    status: 'Everyone starts as a spectator. Join a seat to play.',
   };
 }
 
-function nextActiveTurn(seats: MultiSeat[], current: number): number {
-  const active = seats.filter((s) => s.playerId && !s.forfeited);
-  if (active.length <= 1) return -1;
-  let idx = current;
-  for (let step = 0; step < seats.length; step += 1) {
-    idx = (idx + 1) % seats.length;
-    if (seats[idx].playerId && !seats[idx].forfeited) return idx;
-  }
-  return -1;
-}
-
 export default function UnoPage() {
-  const { account, canAfford, spendChips, addChips, localPlay } = useAppSettings();
+  const { account, addChips, spendChips, canAfford, localPlay } = useAppSettings();
   const displayName = account.username.trim() || 'Guest';
   const multiplayerMode = !!localPlay;
 
-  const playerIdRef = useRef<string>('');
+  const playerIdRef = useRef('');
   if (!playerIdRef.current) {
-    playerIdRef.current = `player-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    playerIdRef.current = `uno-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   }
   const playerId = playerIdRef.current;
 
-  // SOLO / CPU MODE
-  const [soloWager, setSoloWager] = useState(25);
-  const [soloDeck, setSoloDeck] = useState<UnoCard[]>([]);
-  const [soloDiscard, setSoloDiscard] = useState<UnoCard[]>([]);
-  const [soloHands, setSoloHands] = useState<UnoCard[][]>([]);
-  const [soloTurn, setSoloTurn] = useState(0);
-  const [soloLogs, setSoloLogs] = useState<string[]>([]);
-  const [soloStarted, setSoloStarted] = useState(false);
-  const [soloBotCount, setSoloBotCount] = useState(1);
+  const [pendingWildCard, setPendingWildCard] = useState<UnoCard | null>(null);
+  const [tableWager, setTableWager] = useState(25);
+  const [soloState, setSoloState] = useState<UnoState>(() => ({
+    ...initialState(),
+    seats: [
+      { id: 'you', playerId, name: displayName, cards: [], ready: false, agreedWager: 25 },
+      { id: 'bot-1', playerId: 'bot-1', name: 'CPU 1', cards: [], ready: true, agreedWager: 25, isBot: true },
+    ],
+  }));
 
-  const soloNames = useMemo(
-    () => [displayName, ...Array.from({ length: soloBotCount }, (_, i) => `CPU ${i + 1}`)],
-    [displayName, soloBotCount]
-  );
-  const soloTop = soloDiscard[soloDiscard.length - 1];
-
-  function addSoloLog(text: string) {
-    setSoloLogs((prev) => [text, ...prev].slice(0, 12));
-  }
-
-  function startSoloGame() {
-    if (!canAfford(soloWager)) return;
-    spendChips(soloWager);
-
-    const nextDeck = makeDeck();
-    const dealtHands = Array.from({ length: soloNames.length }, () => nextDeck.splice(0, 7));
-    const top = nextDeck.shift();
-    if (!top) return;
-
-    setSoloDeck(nextDeck);
-    setSoloHands(dealtHands);
-    setSoloDiscard([top]);
-    setSoloTurn(0);
-    setSoloStarted(true);
-    setSoloLogs([`UNO round started at $${soloWager}. Top card: ${top.color} ${top.value}. CPUs: ${soloBotCount}.`]);
-  }
-
-  function drawSoloCard(playerIndex: number) {
-    if (!soloStarted || !soloDeck.length) return;
-    const nextDeck = [...soloDeck];
-    const card = nextDeck.shift();
-    if (!card) return;
-
-    const nextHands = soloHands.map((h) => [...h]);
-    nextHands[playerIndex].push(card);
-
-    setSoloDeck(nextDeck);
-    setSoloHands(nextHands);
-    setSoloTurn((playerIndex + 1) % nextHands.length);
-    addSoloLog(`${soloNames[playerIndex]} draws.`);
-  }
-
-  function playSoloCard(playerIndex: number, cardIndex: number) {
-    const top = soloDiscard[soloDiscard.length - 1];
-    const nextHands = soloHands.map((h) => [...h]);
-    const card = nextHands[playerIndex]?.[cardIndex];
-    if (!card || !top || !canPlay(card, top)) return;
-
-    nextHands[playerIndex].splice(cardIndex, 1);
-    setSoloHands(nextHands);
-    setSoloDiscard((prev) => [...prev, card]);
-    setSoloTurn((playerIndex + 1) % nextHands.length);
-    addSoloLog(`${soloNames[playerIndex]} plays ${card.color} ${card.value}.`);
-  }
-
-  useEffect(() => {
-    if (multiplayerMode) return;
-    if (!soloStarted || soloTurn === 0) return;
-
-    const timer = setTimeout(() => {
-      const cpuHand = soloHands[soloTurn] || [];
-      const top = soloDiscard[soloDiscard.length - 1];
-      if (!top) return;
-
-      const playableIndex = cpuHand.findIndex((c) => canPlay(c, top));
-      if (playableIndex >= 0) playSoloCard(soloTurn, playableIndex);
-      else drawSoloCard(soloTurn);
-    }, 700);
-
-    return () => clearTimeout(timer);
-  }, [multiplayerMode, soloStarted, soloTurn, soloHands, soloDiscard, soloDeck]);
-
-  // MULTIPLAYER MODE
-  const initialMulti = useMemo(() => makeInitialMultiState(), []);
-  const { players: roomPlayers, sharedState, pushState } = useSharedRoom<MultiState>(
+  const { sharedState, pushState, players: roomPlayers } = useSharedRoom<UnoState>(
     'cardhub-uno-main',
     `${displayName} (${playerId.slice(-4)})`,
-    initialMulti
+    useMemo(() => initialState(), [])
   );
 
-  const seats = Array.isArray(sharedState?.seats) ? sharedState.seats : initialMulti.seats;
-  const spectators = Array.isArray(sharedState?.spectators) ? sharedState.spectators : [];
-  const multiDeck = Array.isArray(sharedState?.deck) ? sharedState.deck : [];
-  const multiDiscard = Array.isArray(sharedState?.discard) ? sharedState.discard : [];
-  const multiLogs = Array.isArray(sharedState?.logs) ? sharedState.logs : [];
-  const multiTurn = typeof sharedState?.turn === 'number' ? sharedState.turn : 0;
-  const multiStarted = !!sharedState?.started;
-  const multiWager = typeof sharedState?.wager === 'number' ? sharedState.wager : 25;
-  const multiPot = typeof sharedState?.pot === 'number' ? sharedState.pot : 0;
-  const multiStatus = sharedState?.status || 'Everyone starts as a spectator. Join a seat to play.';
-  const multiTop = multiDiscard[multiDiscard.length - 1];
+  const state = multiplayerMode ? sharedState : soloState;
+  const push = (next: UnoState) => {
+    if (multiplayerMode) pushState(next);
+    else setSoloState(next);
+  };
+
+  const seats = Array.isArray(state?.seats) ? state.seats : [];
+  const spectators = Array.isArray(state?.spectators) ? state.spectators : [];
+  const discard = Array.isArray(state?.discard) ? state.discard : [];
+  const logs = Array.isArray(state?.logs) ? state.logs : [];
+  const deck = Array.isArray(state?.deck) ? state.deck : [];
+  const topCard = discard[discard.length - 1];
   const mySeatIndex = seats.findIndex((s) => s.playerId === playerId);
-  const isSpectator = mySeatIndex < 0;
-  const activeSeats = seats.filter((s) => s.playerId && !s.forfeited);
-  const everyoneReady = activeSeats.length >= 2 && activeSeats.every((s) => s.ready);
+  const mySeat = mySeatIndex >= 0 ? seats[mySeatIndex] : null;
+  const isMyTurn = state.started && state.turn === mySeatIndex;
 
-  const [multiSecondsLeft, setMultiSecondsLeft] = useState(MULTI_READY_SECONDS);
-
-  const latestSeatsRef = useRef(seats);
-  const latestSpectatorsRef = useRef(spectators);
-  const latestSharedStateRef = useRef(sharedState);
-  const latestMySeatIndexRef = useRef(mySeatIndex);
-  const latestMultiStartedRef = useRef(multiStarted);
-
-  useEffect(() => {
-    latestSeatsRef.current = seats;
-    latestSpectatorsRef.current = spectators;
-    latestSharedStateRef.current = sharedState;
-    latestMySeatIndexRef.current = mySeatIndex;
-    latestMultiStartedRef.current = multiStarted;
-  }, [seats, spectators, sharedState, mySeatIndex, multiStarted]);
-
-  function pushMulti(next: MultiState) {
-    pushState(next);
+  function withLog(next: UnoState, text: string): UnoState {
+    return { ...next, logs: [text, ...(next.logs || [])].slice(0, 16) };
   }
 
-  function addMultiLog(state: MultiState, text: string): MultiState {
-    return { ...state, logs: [text, ...state.logs].slice(0, 14) };
+  function updateMyWager(amount: number) {
+    if (state.started) return;
+    setTableWager(amount);
+
+    const nextSeats = seats.map((s, i) => {
+      if (!multiplayerMode) return { ...s, agreedWager: amount, ready: s.isBot ? true : false };
+      if (i === mySeatIndex) return { ...s, agreedWager: amount, ready: false };
+      return s;
+    });
+
+    push({
+      ...state,
+      wager: amount,
+      seats: nextSeats,
+      status: multiplayerMode
+        ? `Wager set to $${amount}. Everyone must agree and ready up.`
+        : `Solo wager set to $${amount}. Ready up when you are done adding CPUs.`,
+    });
+  }
+
+  function allPlayersAgreeOnWager(list = seats) {
+    if (!list.length) return false;
+    return list.every((s) => s.agreedWager === state.wager);
   }
 
   function joinSeat() {
-    if (multiStarted) return;
-    if (!isSpectator) return;
-
-    const openSeatIndex = seats.findIndex((s) => s.playerId === null);
-    if (openSeatIndex >= 0) {
-      pushMulti({
-        ...sharedState,
-        seats: seats.map((s, i) =>
-          i === openSeatIndex
-            ? { ...s, playerId, name: displayName, isHuman: true, ready: false, cards: [], bankrollPaid: false, forfeited: false }
-            : s
-        ),
-        spectators: spectators.filter((s) => s.playerId !== playerId),
+    if (mySeatIndex >= 0) return;
+    if (state.started) {
+      push({
+        ...state,
+        spectators: spectators.some((s) => s.playerId === playerId)
+          ? spectators
+          : [...spectators, { playerId, name: displayName }],
       });
       return;
     }
 
-    if (seats.length < MAX_MULTIPLAYER_SEATS) {
-      pushMulti({
-        ...sharedState,
-        seats: [
-          ...seats,
-          {
-            id: `seat-${Date.now()}`,
-            playerId,
-            name: displayName,
-            isHuman: true,
-            cards: [],
-            ready: false,
-            bankrollPaid: false,
-            forfeited: false,
-          },
-        ],
-        spectators: spectators.filter((s) => s.playerId !== playerId),
-      });
-      return;
-    }
-
-    if (!spectators.some((s) => s.playerId === playerId)) {
-      pushMulti({
-        ...sharedState,
-        spectators: [...spectators, { playerId, name: displayName }],
-      });
-    }
+    push({
+      ...state,
+      seats: [
+        ...seats,
+        { id: `seat-${Date.now()}`, playerId, name: displayName, cards: [], ready: false, agreedWager: state.wager },
+      ].slice(0, 6),
+      spectators: spectators.filter((s) => s.playerId !== playerId),
+      status: `${displayName} joined the table.`,
+    });
   }
 
   function leaveSeat() {
     if (mySeatIndex < 0) return;
 
-    // Mid-game leave = forfeit and become spectator
-    if (multiStarted) {
-      const nextSeats = seats.map((s, i) =>
-        i === mySeatIndex
-          ? { ...s, forfeited: true, ready: false, playerId: null, name: 'Open Seat', cards: [] }
-          : s
-      );
+    const nextSeats = seats.filter((s) => s.playerId !== playerId);
+    const remaining = nextSeats.filter((s) => !s.isBot);
 
-      const remaining = nextSeats.filter((s) => s.playerId && !s.forfeited);
-      let nextState: MultiState = addMultiLog(
+    if (state.started && remaining.length === 1) {
+      if (remaining[0].playerId === playerId) addChips(state.pot);
+      push(
+        withLog(
+          {
+            ...state,
+            seats: nextSeats,
+            spectators: spectators.some((s) => s.playerId === playerId)
+              ? spectators
+              : [...spectators, { playerId, name: displayName }],
+            started: false,
+            status: `${remaining[0].name} wins the pot.`,
+          },
+          `${displayName} left the table.`
+        )
+      );
+      return;
+    }
+
+    push(
+      withLog(
         {
-          ...sharedState,
+          ...state,
           seats: nextSeats,
           spectators: spectators.some((s) => s.playerId === playerId)
             ? spectators
             : [...spectators, { playerId, name: displayName }],
-          status: `${displayName} forfeited and moved to spectators.`,
+          turn: Math.min(state.turn, Math.max(0, nextSeats.length - 1)),
+          status: `${displayName} left the table.`,
         },
-        `${displayName} left mid-game and forfeited.`
-      );
+        `${displayName} left the table.`
+      )
+    );
+  }
 
-      if (remaining.length === 1) {
-        const winner = remaining[0];
-        if (winner.playerId === playerId) {
-          addChips(multiPot);
-        }
-        nextState = addMultiLog(
-          {
-            ...nextState,
-            started: false,
-            status: `${winner.name} wins the whole pot of $${multiPot}.`,
-          },
-          `${winner.name} wins by last player standing.`
-        );
-      } else {
-        const currentTurnSeat = seats[multiTurn];
-        if (currentTurnSeat?.playerId === playerId) {
-          const nextTurn = nextActiveTurn(nextSeats, multiTurn);
-          if (nextTurn >= 0) {
-            nextState = { ...nextState, turn: nextTurn };
-          }
-        }
-      }
+  function toggleReady() {
+    if (mySeatIndex < 0 || state.started) return;
 
-      pushMulti(nextState);
+    const me = seats[mySeatIndex];
+    if (!me) return;
+
+    if (me.agreedWager !== state.wager) {
+      push({
+        ...state,
+        status: `Set your wager to $${state.wager} before readying up.`,
+      });
       return;
     }
 
-    // Pre-game leave
-    pushMulti({
-      ...sharedState,
-      seats: seats.map((s, i) =>
-        i === mySeatIndex
-          ? { ...s, playerId: null, name: 'Open Seat', isHuman: true, cards: [], ready: false, bankrollPaid: false, forfeited: false }
-          : s
-      ),
-      spectators: spectators.some((s) => s.playerId === playerId)
-        ? spectators
-        : [...spectators, { playerId, name: displayName }],
-    });
-  }
-
-  function toggleMyReady() {
-    if (mySeatIndex < 0 || multiStarted) return;
-    pushMulti({
-      ...sharedState,
+    push({
+      ...state,
       seats: seats.map((s, i) =>
         i === mySeatIndex ? { ...s, ready: !s.ready } : s
       ),
+      status: !me.ready
+        ? `${displayName} is ready.`
+        : `${displayName} is no longer ready.`,
     });
   }
 
-  function startMultiplayerRound() {
-    if (!everyoneReady || multiStarted) return;
-
-    const humanCount = activeSeats.length;
-    if (humanCount < 2) return;
-
-    // Only the host/first seated player triggers the room state.
-    // Each participant pays on their own device when they see the started transition.
-    const nextDeck = makeDeck();
-    const nextSeats = seats.map((s) =>
-      s.playerId
-        ? { ...s, cards: nextDeck.splice(0, 7), bankrollPaid: false, forfeited: false }
-        : s
-    );
-    const top = nextDeck.shift();
-    if (!top) return;
-
-    pushMulti(
-      addMultiLog(
+  function addBot() {
+    if (multiplayerMode || state.started || seats.length >= 6) return;
+    push({
+      ...state,
+      seats: [
+        ...seats,
         {
-          ...sharedState,
-          seats: nextSeats,
-          deck: nextDeck,
-          discard: [top],
-          turn: seats.findIndex((s) => s.playerId && !s.forfeited),
-          started: true,
-          status: `${nextSeats.find((s) => s.playerId && !s.forfeited)?.name || 'Player'} to act.`,
-          wager: multiWager,
-          pot: multiWager * humanCount,
+          id: `bot-${Date.now()}`,
+          playerId: `bot-${Date.now()}`,
+          name: `CPU ${seats.filter((s) => s.isBot).length + 1}`,
+          cards: [],
+          ready: true,
+          agreedWager: state.wager,
+          isBot: true,
         },
-        `Multiplayer UNO round started at shared wager $${multiWager}. Total pot: $${multiWager * humanCount}.`
-      )
-    );
-  }
-
-  // Each participating player pays their own share exactly once when the round begins
-  useEffect(() => {
-    if (!multiplayerMode) return;
-    if (!multiStarted) return;
-    if (mySeatIndex < 0) return;
-
-    const me = seats[mySeatIndex];
-    if (!me || me.bankrollPaid || me.forfeited) return;
-    if (!canAfford(multiWager)) return;
-
-    spendChips(multiWager);
-    pushMulti({
-      ...sharedState,
-      seats: seats.map((s, i) =>
-        i === mySeatIndex ? { ...s, bankrollPaid: true } : s
-      ),
+      ],
     });
-  }, [multiplayerMode, multiStarted, mySeatIndex, seats, multiWager]);
-
-  function endRoundWithWinner(winnerSeat: MultiSeat, reason: string) {
-    if (winnerSeat.playerId === playerId) {
-      addChips(multiPot);
-    }
-    pushMulti(
-      addMultiLog(
-        {
-          ...sharedState,
-          started: false,
-          status: `${winnerSeat.name} wins the pot of $${multiPot}. ${reason}`,
-        },
-        `${winnerSeat.name} wins the pot of $${multiPot}.`
-      )
-    );
   }
 
-  function drawMultiCard(playerIndex: number) {
-    if (!multiStarted || !multiDeck.length) return;
-    const nextDeck = [...multiDeck];
-    const card = nextDeck.shift();
-    if (!card) return;
-
-    const nextSeats = seats.map((s) => ({ ...s, cards: [...s.cards] }));
-    nextSeats[playerIndex].cards.push(card);
-
-    pushMulti(
-      addMultiLog(
-        {
-          ...sharedState,
-          seats: nextSeats,
-          deck: nextDeck,
-          discard: multiDiscard,
-          turn: nextActiveTurn(nextSeats, playerIndex - 1 >= 0 ? playerIndex - 1 : seats.length - 1) >= 0 ? (playerIndex + 1) % nextSeats.length : playerIndex,
-          started: true,
-          status: `${nextSeats[(playerIndex + 1) % nextSeats.length]?.name || 'Player'} to act.`,
-          wager: multiWager,
-          pot: multiPot,
-        },
-        `${nextSeats[playerIndex].name} draws.`
-      )
-    );
+  function removeBot() {
+    if (multiplayerMode || state.started) return;
+    const bot = [...seats].reverse().find((s) => s.isBot);
+    if (!bot) return;
+    push({ ...state, seats: seats.filter((s) => s.id !== bot.id) });
   }
 
-  function playMultiCard(playerIndex: number, cardIndex: number) {
-    const top = multiDiscard[multiDiscard.length - 1];
-    if (!top) return;
+  function startGame() {
+    const readySeats = seats.filter((s) => s.ready);
+    if (readySeats.length < 2) return;
 
-    const nextSeats = seats.map((s) => ({ ...s, cards: [...s.cards] }));
-    const card = nextSeats[playerIndex]?.cards[cardIndex];
-    if (!card || !canPlay(card, top)) return;
-
-    nextSeats[playerIndex].cards.splice(cardIndex, 1);
-
-    if (nextSeats[playerIndex].cards.length === 0) {
-      endRoundWithWinner(nextSeats[playerIndex], 'Hand completed.');
+    if (!allPlayersAgreeOnWager(readySeats)) {
+      push({
+        ...state,
+        status: `Everyone must agree to the $${state.wager} wager before starting.`,
+      });
       return;
     }
 
-    const nextTurn = nextActiveTurn(nextSeats, playerIndex);
-    pushMulti(
-      addMultiLog(
+    const totalPot = state.wager * readySeats.length;
+    if (mySeatIndex >= 0 && !canAfford(state.wager)) return;
+    if (mySeatIndex >= 0) spendChips(state.wager);
+
+    let nextDeck = makeDeck();
+    const nextSeats = readySeats.map((s) => {
+      const drawn = drawCards(nextDeck, 7);
+      nextDeck = drawn.nextDeck;
+      return { ...s, cards: drawn.drawn, ready: false };
+    });
+
+    let first = nextDeck.shift()!;
+    while (isWild(first)) {
+      nextDeck.push(first);
+      first = nextDeck.shift()!;
+    }
+
+    push(
+      withLog(
         {
-          ...sharedState,
+          ...state,
           seats: nextSeats,
-          deck: multiDeck,
-          discard: [...multiDiscard, card],
-          turn: nextTurn >= 0 ? nextTurn : playerIndex,
+          deck: nextDeck,
+          discard: [first],
+          currentColor: first.color as Exclude<UnoColor, 'wild'>,
+          turn: 0,
+          direction: 1,
+          drawStack: 0,
           started: true,
-          status: nextTurn >= 0 ? `${nextSeats[nextTurn].name} to act.` : 'Round resolving.',
-          wager: multiWager,
-          pot: multiPot,
+          timer: TIMER,
+          pot: totalPot,
+          status: `${nextSeats[0].name}'s turn.`,
         },
-        `${nextSeats[playerIndex].name} plays ${card.color} ${card.value}.`
+        'UNO game started.'
       )
     );
   }
 
   useEffect(() => {
-    if (!multiplayerMode) return;
-    if (multiStarted || !everyoneReady) return;
+    if (state.started) return;
+    if (seats.length < 2) return;
+    if (!seats.every((s) => s.ready)) return;
+    if (!allPlayersAgreeOnWager(seats)) return;
 
-    setMultiSecondsLeft(MULTI_READY_SECONDS);
-    const timer = setInterval(() => {
-      setMultiSecondsLeft((prev) => prev - 1);
-    }, 1000);
+    const id = setTimeout(startGame, 700);
+    return () => clearTimeout(id);
+  }, [state.started, seats, state.wager]);
 
-    return () => clearInterval(timer);
-  }, [multiplayerMode, multiStarted, everyoneReady, seats]);
+  function applyCardEffect(card: UnoCard, base: UnoState, playerIndex: number): UnoState {
+    let direction = base.direction;
+    let drawStack = base.drawStack;
+    let turnSkip = 1;
 
-  useEffect(() => {
-    if (!multiplayerMode) return;
-    if (multiStarted || !everyoneReady) return;
-    if (multiSecondsLeft > 0) return;
-    startMultiplayerRound();
-    setMultiSecondsLeft(MULTI_READY_SECONDS);
-  }, [multiplayerMode, multiSecondsLeft, multiStarted, everyoneReady]);
+    if (card.value === 'R') {
+      direction = direction === 1 ? -1 : 1;
+      if (base.seats.length === 2) turnSkip = 2;
+    }
 
-  useEffect(() => {
-    if (!multiplayerMode) return;
+    if (card.value === 'S') turnSkip = 2;
 
-    const autoLeave = () => {
-      const currentSeats = latestSeatsRef.current;
-      const currentSpectators = latestSpectatorsRef.current;
-      const currentState = latestSharedStateRef.current;
-      const currentSeatIndex = latestMySeatIndexRef.current;
-      const currentStarted = latestMultiStartedRef.current;
+    if (card.value === '+2') {
+      drawStack += 2;
+      turnSkip = 1;
+    }
 
-      if (currentSeatIndex < 0) return;
+    if (card.value === '+4') {
+      const target = nextTurnIndex(base.seats, playerIndex, direction, 1);
+      const drawn = drawCards(base.deck, 4);
+      const punishedSeats = base.seats.map((s, i) =>
+        i === target ? { ...s, cards: [...s.cards, ...drawn.drawn] } : s
+      );
+      const afterTarget = nextTurnIndex(base.seats, target, direction, 1);
 
-      if (currentStarted) {
-        const nextSeats = currentSeats.map((s, i) =>
-          i === currentSeatIndex
-            ? {
-                ...s,
-                forfeited: true,
-                ready: false,
-                playerId: null,
-                name: 'Open Seat',
-                cards: [],
-                bankrollPaid: false,
-              }
-            : s
-        );
+      return {
+        ...base,
+        seats: punishedSeats,
+        deck: drawn.nextDeck,
+        direction,
+        drawStack: 0,
+        turn: afterTarget,
+        status: `${punishedSeats[target]?.name || 'Player'} drew 4. ${punishedSeats[afterTarget]?.name || 'Player'}'s turn.`,
+      };
+    }
 
-        const remaining = nextSeats.filter((s) => s.playerId && !s.forfeited);
-        let nextState = addMultiLog(
+    const nextTurn = nextTurnIndex(base.seats, playerIndex, direction, turnSkip);
+
+    return {
+      ...base,
+      direction,
+      drawStack,
+      turn: nextTurn,
+      status: `${base.seats[nextTurn]?.name || 'Player'}'s turn.${drawStack > 0 ? ` Draw stack: +${drawStack}` : ''}`,
+    };
+  }
+
+  function playCard(card: UnoCard) {
+    if (!state.started || mySeatIndex < 0 || state.turn !== mySeatIndex) return;
+    if (!canPlay(card, topCard, state.currentColor, state.drawStack)) return;
+
+    if (isWild(card) && !card.chosenColor) {
+      setPendingWildCard(card);
+      return;
+    }
+
+    const playedCard = isWild(card)
+      ? { ...card, color: 'wild' as UnoColor, chosenColor: card.chosenColor || 'red' }
+      : card;
+
+    const nextSeats = seats.map((s, i) =>
+      i === mySeatIndex ? { ...s, cards: s.cards.filter((c) => c.id !== card.id) } : s
+    );
+
+    let nextState: UnoState = {
+      ...state,
+      seats: nextSeats,
+      discard: [...discard, playedCard],
+      currentColor: isWild(playedCard) ? playedCard.chosenColor! : playedCard.color as Exclude<UnoColor, 'wild'>,
+    };
+
+    if (nextSeats[mySeatIndex].cards.length === 0) {
+      addChips(state.pot);
+      push(
+        withLog(
           {
-            ...currentState,
-            seats: nextSeats,
-            spectators: currentSpectators.some((s) => s.playerId === playerId)
-              ? currentSpectators
-              : [...currentSpectators, { playerId, name: displayName }],
-            status: `${displayName} left the table and forfeited.`,
+            ...nextState,
+            seats: nextState.seats.map((s) => ({ ...s, ready: false })),
+            started: false,
+            pot: 0,
+            status: `${displayName} wins UNO and takes $${state.pot}. Ready up again for the next game.`,
           },
-          `${displayName} left the table and forfeited.`
+          `${displayName} wins UNO and wins the $${state.pot} pot.`
+        )
+      );
+      return;
+    }
+
+    nextState = applyCardEffect(playedCard, nextState, mySeatIndex);
+    push(withLog(nextState, `${displayName} played ${displayValue(playedCard)}.`));
+  }
+
+  function drawOrTakeStack() {
+    if (!state.started || mySeatIndex < 0 || state.turn !== mySeatIndex) return;
+
+    const amount = state.drawStack > 0 ? state.drawStack : 1;
+    const drawn = drawCards(deck, amount);
+    const nextSeats = seats.map((s, i) =>
+      i === mySeatIndex ? { ...s, cards: [...s.cards, ...drawn.drawn] } : s
+    );
+    const nextTurn = nextTurnIndex(seats, mySeatIndex, state.direction, 1);
+
+    push(
+      withLog(
+        {
+          ...state,
+          seats: nextSeats,
+          deck: drawn.nextDeck,
+          drawStack: 0,
+          turn: nextTurn,
+          status: `${seats[nextTurn]?.name || 'Player'}'s turn.`,
+        },
+        `${displayName} drew ${amount} card${amount === 1 ? '' : 's'}.`
+      )
+    );
+  }
+
+  useEffect(() => {
+    if (!state.started) return;
+    const seat = seats[state.turn];
+    if (!seat?.isBot) return;
+
+    const id = setTimeout(() => {
+      const playable = seat.cards.find((c) => canPlay(c, topCard, state.currentColor, state.drawStack));
+      if (!playable) {
+        const amount = state.drawStack > 0 ? state.drawStack : 1;
+        const drawn = drawCards(deck, amount);
+        const nextSeats = seats.map((s, i) =>
+          i === state.turn ? { ...s, cards: [...s.cards, ...drawn.drawn] } : s
         );
-
-        if (remaining.length === 1) {
-          const winner = remaining[0];
-          if (winner.playerId === playerId) {
-            addChips(currentState.pot || 0);
-          }
-          nextState = addMultiLog(
+        const nextTurn = nextTurnIndex(seats, state.turn, state.direction, 1);
+        push(
+          withLog(
             {
-              ...nextState,
-              started: false,
-              status: `${winner.name} wins the pot of $${currentState.pot || 0}.`,
+              ...state,
+              seats: nextSeats,
+              deck: drawn.nextDeck,
+              drawStack: 0,
+              turn: nextTurn,
+              status: `${seats[nextTurn]?.name || 'Player'}'s turn.`,
             },
-            `${winner.name} wins by last player standing.`
-          );
-        } else {
-          const currentTurnSeat = currentSeats[currentState.turn || 0];
-          if (currentTurnSeat?.playerId === playerId) {
-            const nextTurn = nextActiveTurn(nextSeats, currentState.turn || 0);
-            if (nextTurn >= 0) {
-              nextState = { ...nextState, turn: nextTurn };
-            }
-          }
-        }
-
-        pushState(nextState);
+            `${seat.name} drew ${amount} card${amount === 1 ? '' : 's'}.`
+          )
+        );
         return;
       }
 
-      pushState({
-        ...currentState,
-        seats: currentSeats.map((s, i) =>
-          i === currentSeatIndex
-            ? {
-                ...s,
-                playerId: null,
-                name: 'Open Seat',
-                isHuman: true,
-                cards: [],
-                ready: false,
-                bankrollPaid: false,
-                forfeited: false,
-              }
-            : s
-        ),
-        spectators: currentSpectators.some((s) => s.playerId === playerId)
-          ? currentSpectators
-          : [...currentSpectators, { playerId, name: displayName }],
-      });
+      const chosen = isWild(playable)
+        ? { ...playable, chosenColor: COLORS[Math.floor(Math.random() * COLORS.length)] }
+        : playable;
+
+      const nextSeats = seats.map((s, i) =>
+        i === state.turn ? { ...s, cards: s.cards.filter((c) => c.id !== playable.id) } : s
+      );
+
+      let nextState: UnoState = {
+        ...state,
+        seats: nextSeats,
+        discard: [...discard, chosen],
+        currentColor: isWild(chosen) ? chosen.chosenColor! : chosen.color as Exclude<UnoColor, 'wild'>,
+      };
+
+      if (nextSeats[state.turn].cards.length === 0) {
+        push(withLog({ ...nextState, seats: nextState.seats.map((s) => ({ ...s, ready: false })), started: false, pot: 0, status: `${seat.name} wins UNO. Ready up again for the next game.` }, `${seat.name} wins UNO.`));
+        return;
+      }
+
+      nextState = applyCardEffect(chosen, nextState, state.turn);
+      push(withLog(nextState, `${seat.name} played ${displayValue(chosen)}.`));
+    }, 900);
+
+    return () => clearTimeout(id);
+  }, [state.started, state.turn, seats, deck, discard, topCard, state.currentColor, state.drawStack]);
+
+  // unoSafeUnloadCleanup
+  useEffect(() => {
+    if (!multiplayerMode) return;
+
+    const cleanup = () => {
+      try {
+        const currentSeats = Array.isArray(state?.seats) ? state.seats : [];
+        if (!currentSeats.some((s) => s.playerId === playerId)) return;
+
+        const nextSeats = currentSeats.filter((s) => s.playerId !== playerId);
+        push({
+          ...state,
+          seats: nextSeats,
+          spectators: Array.isArray(state?.spectators)
+            ? state.spectators.some((s) => s.playerId === playerId)
+              ? state.spectators
+              : [...state.spectators, { playerId, name: displayName }]
+            : [{ playerId, name: displayName }],
+          status: `${displayName} left the table.`,
+          logs: [`${displayName} left the table.`, ...(Array.isArray(state?.logs) ? state.logs : [])].slice(0, 16),
+        });
+      } catch {}
     };
 
-    const handlePageHide = () => autoLeave();
-    const handleBeforeUnload = () => autoLeave();
-
-    window.addEventListener('pagehide', handlePageHide);
-    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', cleanup);
+    window.addEventListener('beforeunload', cleanup);
 
     return () => {
-      window.removeEventListener('pagehide', handlePageHide);
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      autoLeave();
+      window.removeEventListener('pagehide', cleanup);
+      window.removeEventListener('beforeunload', cleanup);
     };
-  }, [multiplayerMode, playerId, displayName, addChips, pushState]);
+  }, [multiplayerMode, playerId, displayName, state]);
+
+  const pendingPicker = pendingWildCard ? (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
+      <div className="rounded-2xl border border-white/10 bg-zinc-950 p-6 shadow-2xl">
+        <div className="mb-4 text-xl font-semibold">Choose Wild Color</div>
+        <div className="flex flex-wrap gap-3">
+          {COLORS.map((color) => (
+            <button
+              key={color}
+              className={`rounded-xl border px-6 py-4 font-bold ${cardClass({ id: color, color, value: '0' })}`}
+              onClick={() => {
+                const chosen = { ...pendingWildCard, chosenColor: color };
+                setPendingWildCard(null);
+                playCard(chosen);
+              }}
+            >
+              {color.toUpperCase()}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   return (
-    <GameShell
-      title="UNO"
-      subtitle={multiplayerMode ? 'Multiplayer table mode uses shared state and auto-starts once everyone is ready.' : 'Solo mode uses local state and local bots.'}
-    >
-      {!multiplayerMode ? (
+    <>
+      {pendingPicker}
+      <GameShell
+        title="UNO"
+        subtitle={multiplayerMode ? 'Online UNO with synchronized table play.' : 'Solo UNO with local CPU seats.'}
+      >
         <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
           <div className="space-y-4">
-            <BettingPanel
-              title="UNO Wager"
-              wager={soloWager}
-              setWager={setSoloWager}
-              onStart={startSoloGame}
-              startLabel="Start UNO Game"
-              helperText={`Solo mode uses local state and local bots. CPUs selected: ${soloBotCount}.`}
-            />
-
-            <TurnBanner
-              title={soloStarted ? `${soloNames[soloTurn]} to act` : 'UNO idle'}
-              subtitle={soloTop ? `Top card: ${soloTop.color} ${soloTop.value}` : `Start a new game to deal cards. CPUs selected: ${soloBotCount}.`}
-            />
-
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div className="mb-3 text-lg font-semibold">Center Pile</div>
-              <div className="flex items-center gap-4">
-                <button className="rounded-xl border border-white/10 bg-zinc-900 px-4 py-6 text-sm" onClick={() => drawSoloCard(0)} disabled={!soloStarted || soloTurn !== 0}>
-                  Draw Pile ({soloDeck.length})
-                </button>
-                {soloTop ? <UnoStyleCard card={{ label: String(soloTop.value), color: soloTop.color }} /> : <div className="text-sm text-zinc-400">No top card yet</div>}
-              </div>
-            </div>
-
-            <ActionLog items={soloLogs} />
-          </div>
-
-          <div className="space-y-4">
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <div className="text-lg font-semibold">Active Seats</div>
-                <div className="flex gap-2">
-                  <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={() => setSoloBotCount((v) => Math.min(5, v + 1))} disabled={soloStarted}>Add CPU</button>
-                  <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={() => setSoloBotCount((v) => Math.max(1, v - 1))} disabled={soloStarted}>Remove CPU</button>
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-2xl font-semibold">Table Wager</div>
+                  <div className="mt-1 text-sm text-zinc-300">
+                    Bankroll: <span className="font-semibold text-emerald-300">${account.bankroll}</span>
+                  </div>
+                  <div className="mt-2 text-sm text-zinc-400">
+                    Pot: ${state.pot} • Required agreement: ${state.wager}
+                  </div>
                 </div>
               </div>
 
-              <div className="mb-3 text-sm text-zinc-300">CPUs selected: {soloBotCount}</div>
-
-              <div className="space-y-3">
-                {soloHands.map((hand, playerIndex) => (
-                  <div key={playerIndex} className="rounded-xl border border-white/10 bg-black/20 p-3">
-                    <div className="font-semibold">{soloNames[playerIndex]}</div>
-                    <div className="mt-1 text-sm text-zinc-400">{hand.length} cards</div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {hand.map((card, i) =>
-                        playerIndex === 0 ? (
-                          <button key={i} onClick={() => playSoloCard(0, i)} disabled={!soloStarted || soloTurn !== 0}>
-                            <UnoStyleCard card={{ label: String(card.value), color: card.color }} small />
-                          </button>
-                        ) : (
-                          <UnoStyleCard key={i} hidden small />
-                        )
-                      )}
-                    </div>
-                  </div>
+              <div className="mt-5 flex flex-wrap gap-3">
+                {[10, 25, 50, 100, 250, 500].map((amount) => (
+                  <button
+                    key={amount}
+                    disabled={state.started}
+                    className={`rounded-xl border px-4 py-3 text-sm font-medium transition disabled:opacity-50 ${
+                      state.wager === amount
+                        ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
+                        : 'border-white/10 bg-zinc-900 text-zinc-100 hover:bg-zinc-800'
+                    }`}
+                    onClick={() => updateMyWager(amount)}
+                  >
+                    ${amount}
+                  </button>
                 ))}
               </div>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-          <div className="space-y-4">
-            <BettingPanel
-              title="Shared UNO Wager"
-              wager={multiWager}
-              setWager={(v) => {
-                if (mySeatIndex >= 0 && !multiStarted) {
-                  pushMulti({ ...sharedState, wager: v });
-                }
-              }}
-              helperText={`Every seated player pays the same wager. If you leave mid-game, you forfeit. Pot: $${multiPot}.`}
-            />
 
-            <TurnBanner
-              title={multiStarted ? `${seats[multiTurn]?.name || 'Player'} to act` : everyoneReady ? `Round starts in ${multiSecondsLeft}s` : 'Everyone starts as a spectator until they join a seat'}
-              subtitle={multiTop ? `Top card: ${multiTop.color} ${multiTop.value}` : multiStatus}
-            />
-
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div className="mb-3 text-lg font-semibold">Center Pile</div>
-              <div className="flex items-center gap-4">
-                <button
-                  className="rounded-xl border border-white/10 bg-zinc-900 px-4 py-6 text-sm"
-                  onClick={() => mySeatIndex >= 0 && drawMultiCard(mySeatIndex)}
-                  disabled={!multiStarted || multiTurn !== mySeatIndex}
-                >
-                  Draw Pile ({multiDeck.length})
-                </button>
-                {multiTop ? <UnoStyleCard card={{ label: String(multiTop.value), color: multiTop.color }} /> : <div className="text-sm text-zinc-400">No top card yet</div>}
+              <div className="mt-4 text-sm text-zinc-300">
+                {multiplayerMode
+                  ? allPlayersAgreeOnWager()
+                    ? `Everyone agrees to $${state.wager}.`
+                    : `Everyone must agree to $${state.wager} before the game starts.`
+                  : `Solo wager is $${state.wager}.`}
               </div>
             </div>
 
-            <ActionLog items={multiLogs} />
+            <TurnBanner
+              title={state.started ? `${seats[state.turn]?.name || 'Player'}'s turn` : 'Waiting for players'}
+              subtitle={`${state.status}${state.drawStack > 0 ? ` • Draw stack +${state.drawStack}` : ''}`}
+            />
+
+            <div className="rounded-[2rem] border border-white/10 bg-white/5 p-6">
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="mb-2 font-semibold">Draw Pile</div>
+                  <button
+                    onClick={drawOrTakeStack}
+                    disabled={!isMyTurn}
+                    className="h-28 w-20 rounded-2xl border border-white/20 bg-zinc-950 font-black text-white disabled:opacity-50"
+                  >
+                    {state.drawStack > 0 ? `+${state.drawStack}` : 'DRAW'}
+                  </button>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="mb-2 font-semibold">Center Pile</div>
+                  {topCard ? <UnoCardView card={topCard} /> : <div className="text-sm text-zinc-400">No card yet.</div>}
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="mb-2 font-semibold">Current Color</div>
+                  <div className={`rounded-xl px-4 py-3 text-center font-bold ${cardClass({ id: state.currentColor, color: state.currentColor, value: '0' })}`}>
+                    {state.currentColor.toUpperCase()}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <ActionLog items={logs} />
           </div>
 
           <div className="space-y-4">
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
               <div className="mb-3 flex items-center justify-between">
-                <div className="text-lg font-semibold">Active Seats</div>
+                <div className="text-lg font-semibold">Seats</div>
                 <div className="flex gap-2">
-                  {isSpectator ? (
-                    <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={joinSeat} disabled={multiStarted}>
+                  {mySeatIndex < 0 ? (
+                    <button className="rounded-lg bg-emerald-500 px-3 py-2 text-sm font-semibold text-black" onClick={joinSeat}>
                       Join Seat
                     </button>
                   ) : (
@@ -728,62 +767,75 @@ export default function UnoPage() {
                       Leave Seat
                     </button>
                   )}
+
+                  {!multiplayerMode ? (
+                    <>
+                      <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={addBot}>
+                        Add CPU
+                      </button>
+                      <button className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm" onClick={removeBot}>
+                        Remove CPU
+                      </button>
+                    </>
+                  ) : null}
                 </div>
               </div>
-
-              <div className="mb-3 text-sm text-zinc-300">Shared table wager: ${multiWager} • Total pot: ${multiPot}</div>
 
               <div className="space-y-3">
                 {seats.map((seat, idx) => (
                   <div key={seat.id} className="rounded-xl border border-white/10 bg-black/20 p-3">
                     <div className="flex items-center justify-between">
                       <div>
-                        <div className="font-semibold">{seat.playerId ? seat.name : 'Open Seat'}</div>
-                        <div className="mt-1 text-sm text-zinc-400">{seat.cards.length} cards {seat.forfeited ? '• Forfeited' : ''}</div>
+                        <div className="font-semibold">{seat.name}</div>
+                        <div className="text-sm text-zinc-400">{seat.cards.length} cards • Wager ${seat.agreedWager} {idx === state.turn && state.started ? '• Turn' : ''}</div>
                       </div>
-                      {seat.playerId === playerId ? (
+                      {idx === mySeatIndex && !state.started ? (
                         <button
-                          className={`rounded-lg px-3 py-2 text-sm ${seat.ready ? 'bg-emerald-500 text-black' : 'bg-zinc-800 text-white'}`}
-                          onClick={toggleMyReady}
-                          disabled={multiStarted}
+                          className={`rounded-lg px-3 py-2 text-sm font-semibold ${
+                            seat.ready
+                              ? 'bg-emerald-500 text-black'
+                              : 'border border-white/10 bg-zinc-900 text-white'
+                          }`}
+                          onClick={toggleReady}
                         >
-                          {seat.ready ? 'Ready' : 'Unready'}
+                          {seat.ready ? 'Ready Up' : 'Unready'}
                         </button>
                       ) : (
-                        <div className="rounded-lg bg-zinc-800 px-3 py-2 text-sm text-zinc-300">
-                          {seat.ready ? 'Ready' : 'Not Ready'}
-                        </div>
+                        <span className="text-sm text-zinc-400">{seat.ready ? 'Ready' : ''}</span>
                       )}
                     </div>
-
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {seat.cards.map((card, i) =>
+                    <div className="mt-3 flex flex-wrap gap-1">
+                      {seat.cards.slice(0, 12).map((card) => (
                         idx === mySeatIndex ? (
-                          <button key={i} onClick={() => playMultiCard(idx, i)} disabled={!multiStarted || multiTurn !== mySeatIndex}>
-                            <UnoStyleCard card={{ label: String(card.value), color: card.color }} small />
-                          </button>
+                          <UnoCardView
+                            key={card.id}
+                            card={card}
+                            small
+                            onClick={() => (isWild(card) ? setPendingWildCard(card) : playCard(card))}
+                            disabled={!isMyTurn || !canPlay(card, topCard, state.currentColor, state.drawStack)}
+                          />
                         ) : (
-                          <UnoStyleCard key={i} hidden small />
+                          <UnoCardView key={card.id} card={card} small disabled hidden />
                         )
-                      )}
+                      ))}
                     </div>
                   </div>
                 ))}
               </div>
             </div>
 
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div className="font-semibold">Spectators</div>
-              <div className="mt-2 text-sm text-zinc-400">
-                {spectators.length ? spectators.map((s) => s.name).join(', ') : 'No spectators'}
+            {multiplayerMode ? (
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                <div className="font-semibold">Spectators</div>
+                <div className="mt-2 text-sm text-zinc-400">
+                  {spectators.length ? spectators.map((s) => s.name).join(', ') : 'No spectators'}
+                </div>
+                <div className="mt-3 text-xs text-zinc-500">Connected devices: {roomPlayers.length}</div>
               </div>
-              <div className="mt-3 text-xs text-zinc-500">
-                Connected devices: {roomPlayers.length}
-              </div>
-            </div>
+            ) : null}
           </div>
         </div>
-      )}
-    </GameShell>
+      </GameShell>
+    </>
   );
 }
