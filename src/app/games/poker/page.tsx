@@ -7,6 +7,9 @@ import { ActionLog } from '@/components/ui/ActionLog';
 import { Card } from '@/components/ui/Card';
 import { useAppSettings } from '@/components/app/AppProvider';
 import { useSharedRoom } from '@/hooks/useSharedRoom';
+import { useTableExitCleanup } from '@/hooks/useTableExitCleanup';
+import { useStablePlayerId } from '@/hooks/useStablePlayerId';
+import { useLeaveTableCleanup } from '@/hooks/useLeaveTableCleanup';
 import { useAccentGlow } from '@/hooks/useAccentGlow';
 
 type Suit = '♠' | '♥' | '♦' | '♣';
@@ -185,12 +188,7 @@ export default function PokerPage() {
   const displayName = account.username.trim() || 'Guest';
   const accentGlow = useAccentGlow();
   const multiplayer = !!localPlay;
-
-  const playerIdRef = useRef('');
-  if (!playerIdRef.current) {
-    playerIdRef.current = `poker-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  }
-  const playerId = playerIdRef.current;
+  const playerId = useStablePlayerId('poker', displayName);
 
   // SOLO STATE
   const soloTimerSetting = readyAutoStartSeconds || 15;
@@ -417,7 +415,17 @@ export default function PokerPage() {
     useMemo(() => initialOnlineState(), [])
   );
 
-  const seats = Array.isArray(sharedState?.seats) ? sharedState.seats : [];
+  const seats = Array.isArray(sharedState?.seats)
+    ? sharedState.seats.map((seat: any) => ({
+        ...seat,
+        cards: Array.isArray(seat.cards) ? seat.cards : [],
+        folded: Boolean(seat.folded),
+        acted: Boolean(seat.acted),
+        ready: Boolean(seat.ready),
+        bet: typeof seat.bet === 'number' ? seat.bet : 0,
+        chips: typeof seat.chips === 'number' ? seat.chips : 1000,
+      }))
+    : [];
   const spectators = Array.isArray(sharedState?.spectators) ? sharedState.spectators : [];
   const board = Array.isArray(sharedState?.board) ? sharedState.board : [];
   const deck = Array.isArray(sharedState?.deck) ? sharedState.deck : [];
@@ -475,7 +483,7 @@ export default function PokerPage() {
     if (mySeatIndex < 0) return;
 
     const currentSeat = seats[mySeatIndex];
-    const nextSeats = seats.filter((_, i) => i !== mySeatIndex);
+    const nextSeats = seats.filter((seat) => seat.playerId !== playerId);
 
     let nextState: OnlineState = withLog(
       {
@@ -777,77 +785,58 @@ export default function PokerPage() {
     finishOnlineStreet(nextSeats, nextDeck);
   }
 
-  useEffect(() => {
-    if (!multiplayer) return;
-    if (seats.length < 1) return;
-    if (mySeatIndex !== 0) return;
 
-    const id = setInterval(() => {
-      push({
+  // tableExitAndStalePruneInstalled
+  function removeCurrentPlayerFromTable() {
+    try {
+      const currentSeats = Array.isArray(sharedState?.seats) ? sharedState.seats : [];
+      if (!currentSeats.some((s: any) => s.playerId === playerId)) return;
+
+      const nextSeats = currentSeats.filter((s: any) => s.playerId !== playerId);
+
+      pushState({
         ...sharedState,
-        timer: Math.max(0, timer - 1),
+        seats: nextSeats,
+        
+        activeSeat: typeof sharedState?.activeSeat === 'number' ? Math.min(sharedState.activeSeat, Math.max(-1, nextSeats.length - 1)) : sharedState?.activeSeat,
+        spectators: Array.isArray(sharedState?.spectators)
+          ? sharedState.spectators.some((s: any) => s.playerId === playerId)
+            ? sharedState.spectators
+            : [...sharedState.spectators, { playerId, name: displayName }]
+          : [{ playerId, name: displayName }],
+        status: `${displayName} left the table.`,
+        logs: [`${displayName} left the table.`, ...(Array.isArray(sharedState?.logs) ? sharedState.logs : [])].slice(0, 16),
       });
-    }, 1000);
+    } catch {}
+  }
 
-    return () => clearInterval(id);
-  }, [multiplayer, seats.length, mySeatIndex, timer, sharedState]);
+  useTableExitCleanup(removeCurrentPlayerFromTable, Boolean(multiplayer) && mySeatIndex >= 0);
 
   useEffect(() => {
     if (!multiplayer) return;
-    if (mySeatIndex !== 0) return;
-    if (timer > 0) return;
-    if (phase === 'ready') {
-      startOnlineHand();
+    if (!Array.isArray(seats)) return;
+    if (!Array.isArray(roomPlayers)) return;
+    if (mySeatIndex !== 0 && seats.length > 0) return;
+
+    const connected = JSON.stringify(roomPlayers);
+    const nextSeats = seats.filter((s: any) => {
+      if (!s?.playerId) return false;
+      if (String(s.playerId).startsWith('bot')) return true;
+      return connected.includes(String(s.playerId).slice(-4));
+    });
+
+    if (nextSeats.length !== seats.length) {
+      pushState({
+        ...sharedState,
+        seats: nextSeats,
+        
+        activeSeat: typeof sharedState?.activeSeat === 'number' ? Math.min(sharedState.activeSeat, Math.max(-1, nextSeats.length - 1)) : sharedState?.activeSeat,
+        status: 'Disconnected players were removed from the table.',
+        logs: ['Disconnected players were removed from the table.', ...(Array.isArray(sharedState?.logs) ? sharedState.logs : [])].slice(0, 16),
+      });
     }
-  }, [multiplayer, timer, phase, mySeatIndex, seats]);
+  }, [multiplayer, mySeatIndex, seats, roomPlayers]);
 
-  useEffect(() => {
-    if (!multiplayer) return;
-    if (phase === 'ready' || phase === 'waiting') return;
-    const seat = seats[activeSeat];
-    if (!seat || !seat.playerId || seat.playerId === playerId) return;
-
-    const id = setTimeout(() => {
-      const nextDeck = [...deck];
-      const nextSeats = seats.map((s) => ({ ...s, cards: [...s.cards] }));
-      const bot = nextSeats[activeSeat];
-      const owe = Math.max(0, currentBet - bot.bet);
-
-      // human-only online: no CPU logic, just simple fallback auto-action so table never freezes
-      if (owe > 0) {
-        if (owe > bot.chips) {
-          bot.folded = true;
-          bot.acted = true;
-        } else {
-          bot.chips -= owe;
-          bot.bet += owe;
-          bot.acted = true;
-        }
-      } else {
-        bot.acted = true;
-      }
-
-      finishOnlineStreet(nextSeats, nextDeck);
-    }, 900);
-
-    return () => clearTimeout(id);
-  }, [multiplayer, phase, activeSeat, seats, currentBet, deck, board, pot]);
-
-  useEffect(() => {
-    if (!multiplayer) return;
-    const cleanup = () => {
-      try {
-        if (latestRef.current.mySeatIndex >= 0) leaveSeat();
-      } catch {}
-    };
-    window.addEventListener('pagehide', cleanup);
-    window.addEventListener('beforeunload', cleanup);
-    return () => {
-      window.removeEventListener('pagehide', cleanup);
-      window.removeEventListener('beforeunload', cleanup);
-      cleanup();
-    };
-  }, [multiplayer]);
 
   return (
     <GameShell
@@ -941,7 +930,7 @@ export default function PokerPage() {
                         Chips ${seat.chips} • Bet ${seat.bet} {seat.folded ? '• Folded' : ''}
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2">
-                        {seat.cards.map((card) => (
+                        {(Array.isArray(seat.cards) ? seat.cards : []).map((card) => (
                           <Card key={card.id} card={parseCard(card)} hidden={idx !== 0 && soloPhase !== 'waiting'} />
                         ))}
                       </div>
@@ -969,7 +958,17 @@ export default function PokerPage() {
           ) : (
             <>
               <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="mb-3 text-lg font-semibold">Active Seats</div>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="text-lg font-semibold">Active Seats</div>
+                  {mySeatIndex >= 0 ? (
+                    <button
+                      className="rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm"
+                      onClick={leaveSeat}
+                    >
+                      Leave Table
+                    </button>
+                  ) : null}
+                </div>
 
                 <div className="mb-4">
                   <div className="mb-2 text-sm text-zinc-300">Raise Amount: ${raiseAmount}</div>
@@ -1017,7 +1016,7 @@ export default function PokerPage() {
                       </div>
 
                       <div className="mt-3 flex flex-wrap gap-2">
-                        {seat.cards.map((card) => (
+                        {(Array.isArray(seat.cards) ? seat.cards : []).map((card) => (
                           <Card key={card.id} card={parseCard(card)} hidden={idx !== mySeatIndex && phase !== 'ready'} />
                         ))}
                       </div>

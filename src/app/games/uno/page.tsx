@@ -6,6 +6,9 @@ import { TurnBanner } from '@/components/ui/TurnBanner';
 import { ActionLog } from '@/components/ui/ActionLog';
 import { useAppSettings } from '@/components/app/AppProvider';
 import { useSharedRoom } from '@/hooks/useSharedRoom';
+import { useTableExitCleanup } from '@/hooks/useTableExitCleanup';
+import { useStablePlayerId } from '@/hooks/useStablePlayerId';
+import { useLeaveTableCleanup } from '@/hooks/useLeaveTableCleanup';
 
 type UnoColor = 'red' | 'yellow' | 'green' | 'blue' | 'wild';
 type UnoValue = '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '+2' | '+4' | 'R' | 'S' | 'W';
@@ -197,12 +200,7 @@ export default function UnoPage() {
   const { account, addChips, spendChips, canAfford, localPlay } = useAppSettings();
   const displayName = account.username.trim() || 'Guest';
   const multiplayerMode = !!localPlay;
-
-  const playerIdRef = useRef('');
-  if (!playerIdRef.current) {
-    playerIdRef.current = `uno-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  }
-  const playerId = playerIdRef.current;
+  const playerId = useStablePlayerId('uno', displayName);
 
   const [pendingWildCard, setPendingWildCard] = useState<UnoCard | null>(null);
   const [tableWager, setTableWager] = useState(25);
@@ -226,7 +224,14 @@ export default function UnoPage() {
     else setSoloState(next);
   };
 
-  const seats = Array.isArray(state?.seats) ? state.seats : [];
+  const seats = Array.isArray(state?.seats)
+    ? state.seats.map((seat: any) => ({
+        ...seat,
+        cards: Array.isArray(seat.cards) ? seat.cards : [],
+        ready: Boolean(seat.ready),
+        agreedWager: typeof seat.agreedWager === 'number' ? seat.agreedWager : state.wager,
+      }))
+    : [];
   const spectators = Array.isArray(state?.spectators) ? state.spectators : [];
   const discard = Array.isArray(state?.discard) ? state.discard : [];
   const logs = Array.isArray(state?.logs) ? state.logs : [];
@@ -614,39 +619,6 @@ export default function UnoPage() {
     return () => clearTimeout(id);
   }, [state.started, state.turn, seats, deck, discard, topCard, state.currentColor, state.drawStack]);
 
-  // unoSafeUnloadCleanup
-  useEffect(() => {
-    if (!multiplayerMode) return;
-
-    const cleanup = () => {
-      try {
-        const currentSeats = Array.isArray(state?.seats) ? state.seats : [];
-        if (!currentSeats.some((s) => s.playerId === playerId)) return;
-
-        const nextSeats = currentSeats.filter((s) => s.playerId !== playerId);
-        push({
-          ...state,
-          seats: nextSeats,
-          spectators: Array.isArray(state?.spectators)
-            ? state.spectators.some((s) => s.playerId === playerId)
-              ? state.spectators
-              : [...state.spectators, { playerId, name: displayName }]
-            : [{ playerId, name: displayName }],
-          status: `${displayName} left the table.`,
-          logs: [`${displayName} left the table.`, ...(Array.isArray(state?.logs) ? state.logs : [])].slice(0, 16),
-        });
-      } catch {}
-    };
-
-    window.addEventListener('pagehide', cleanup);
-    window.addEventListener('beforeunload', cleanup);
-
-    return () => {
-      window.removeEventListener('pagehide', cleanup);
-      window.removeEventListener('beforeunload', cleanup);
-    };
-  }, [multiplayerMode, playerId, displayName, state]);
-
   const pendingPicker = pendingWildCard ? (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
       <div className="rounded-2xl border border-white/10 bg-zinc-950 p-6 shadow-2xl">
@@ -669,6 +641,59 @@ export default function UnoPage() {
       </div>
     </div>
   ) : null;
+
+
+  // tableExitAndStalePruneInstalled
+  function removeCurrentPlayerFromTable() {
+    try {
+      const currentSeats = Array.isArray(state?.seats) ? state.seats : [];
+      if (!currentSeats.some((s: any) => s.playerId === playerId)) return;
+
+      const nextSeats = currentSeats.filter((s: any) => s.playerId !== playerId);
+
+      push({
+        ...state,
+        seats: nextSeats,
+        turn: typeof state?.turn === 'number' ? Math.min(state.turn, Math.max(0, nextSeats.length - 1)) : state?.turn,
+        
+        spectators: Array.isArray(state?.spectators)
+          ? state.spectators.some((s: any) => s.playerId === playerId)
+            ? state.spectators
+            : [...state.spectators, { playerId, name: displayName }]
+          : [{ playerId, name: displayName }],
+        status: `${displayName} left the table.`,
+        logs: [`${displayName} left the table.`, ...(Array.isArray(state?.logs) ? state.logs : [])].slice(0, 16),
+      });
+    } catch {}
+  }
+
+  useTableExitCleanup(removeCurrentPlayerFromTable, Boolean(multiplayerMode) && mySeatIndex >= 0);
+
+  useEffect(() => {
+    if (!multiplayerMode) return;
+    if (!Array.isArray(seats)) return;
+    if (!Array.isArray(roomPlayers)) return;
+    if (mySeatIndex !== 0 && seats.length > 0) return;
+
+    const connected = JSON.stringify(roomPlayers);
+    const nextSeats = seats.filter((s: any) => {
+      if (!s?.playerId) return false;
+      if (String(s.playerId).startsWith('bot')) return true;
+      return connected.includes(String(s.playerId).slice(-4));
+    });
+
+    if (nextSeats.length !== seats.length) {
+      push({
+        ...state,
+        seats: nextSeats,
+        turn: typeof state?.turn === 'number' ? Math.min(state.turn, Math.max(0, nextSeats.length - 1)) : state?.turn,
+        
+        status: 'Disconnected players were removed from the table.',
+        logs: ['Disconnected players were removed from the table.', ...(Array.isArray(state?.logs) ? state.logs : [])].slice(0, 16),
+      });
+    }
+  }, [multiplayerMode, mySeatIndex, seats, roomPlayers]);
+
 
   return (
     <>
@@ -787,7 +812,7 @@ export default function UnoPage() {
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="font-semibold">{seat.name}</div>
-                        <div className="text-sm text-zinc-400">{seat.cards.length} cards • Wager ${seat.agreedWager} {idx === state.turn && state.started ? '• Turn' : ''}</div>
+                        <div className="text-sm text-zinc-400">{(Array.isArray(seat.cards) ? seat.cards.length : 0)} cards • Wager ${seat.agreedWager} {idx === state.turn && state.started ? '• Turn' : ''}</div>
                       </div>
                       {idx === mySeatIndex && !state.started ? (
                         <button
@@ -805,7 +830,7 @@ export default function UnoPage() {
                       )}
                     </div>
                     <div className="mt-3 flex flex-wrap gap-1">
-                      {seat.cards.slice(0, 12).map((card) => (
+                      {(Array.isArray(seat.cards) ? seat.cards : []).slice(0, 12).map((card) => (
                         idx === mySeatIndex ? (
                           <UnoCardView
                             key={card.id}

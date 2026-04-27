@@ -7,6 +7,9 @@ import { ActionLog } from '@/components/ui/ActionLog';
 import { Card } from '@/components/ui/Card';
 import { useAppSettings } from '@/components/app/AppProvider';
 import { useSharedRoom } from '@/hooks/useSharedRoom';
+import { useTableExitCleanup } from '@/hooks/useTableExitCleanup';
+import { useStablePlayerId } from '@/hooks/useStablePlayerId';
+import { useLeaveTableCleanup } from '@/hooks/useLeaveTableCleanup';
 import { useAccentGlow } from '@/hooks/useAccentGlow';
 
 type Suit = '♠' | '♥' | '♦' | '♣';
@@ -261,12 +264,7 @@ export default function BaccaratPage() {
   const baccaratBoxThemeStyle = {
     background: 'radial-gradient(circle at center, var(--accent-glow, var(--accent-glow, var(--accent-glow))), rgba(9,9,11,1) 72%)',
   };
-
-  const playerIdRef = useRef('');
-  if (!playerIdRef.current) {
-    playerIdRef.current = `bacc-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-  }
-  const playerId = playerIdRef.current;
+  const playerId = useStablePlayerId('baccarat', displayName);
 
   // SOLO STATE
   const soloTimerSetting = readyAutoStartSeconds || 15;
@@ -435,165 +433,65 @@ export default function BaccaratPage() {
   const [multiPlayerPairBet, setMultiPlayerPairBet] = useState(5);
   const [multiBankerPairBet, setMultiBankerPairBet] = useState(5);
 
-  useEffect(() => {
-    if (!multiplayer) return;
-    if (mySeatIndex < 0) return;
-
-    const seat = seats[mySeatIndex];
-    if (!seat) return;
-
-    if (
-      seat.wager !== multiWager ||
-      seat.betSide !== multiBetSide ||
-      seat.playerPairBet !== multiPlayerPairBet ||
-      seat.bankerPairBet !== multiBankerPairBet
-    ) {
-      push({
-        ...sharedState,
-        seats: seats.map((s, i) =>
-          i === mySeatIndex
-            ? {
-                ...s,
-                wager: multiWager,
-                betSide: multiBetSide,
-                playerPairBet: multiPlayerPairBet,
-                bankerPairBet: multiBankerPairBet,
-              }
-            : s
-        ),
-      });
-    }
-  }, [multiplayer, mySeatIndex, multiWager, multiBetSide, multiPlayerPairBet, multiBankerPairBet]);
-
-  // only seat 0 drives synchronized timer
-  useEffect(() => {
-    if (!multiplayer) return;
-    if (seats.length < 1) return;
-    if (mySeatIndex !== 0) return;
-
-    const id = setInterval(() => {
-      push({
-        ...sharedState,
-        timer: Math.max(0, timer - 1),
-      });
-    }, 1000);
-
-    return () => clearInterval(id);
-  }, [multiplayer, seats.length, mySeatIndex, timer, sharedState]);
-
-  // only seat 0 deals the next round
-  useEffect(() => {
-    if (!multiplayer) return;
-    if (seats.length < 1) return;
-    if (mySeatIndex !== 0) return;
-    if (timer > 0) return;
-
-    const deck = makeDeck();
-    const nextPlayerHand = [deck.shift()!, deck.shift()!];
-    const nextBankerHand = [deck.shift()!, deck.shift()!];
-    const nextPlayerTotal = baccaratTotal(nextPlayerHand);
-    const nextBankerTotal = baccaratTotal(nextBankerHand);
-    const winner = resultSide(nextPlayerTotal, nextBankerTotal);
-
-    push(
-      withLog(
-        {
-          ...sharedState,
-          playerHand: nextPlayerHand,
-          bankerHand: nextBankerHand,
-          playerTotal: nextPlayerTotal,
-          bankerTotal: nextBankerTotal,
-          timer: ONLINE_TIMER,
-          roundId: roundId + 1,
-          status: `${winner[0].toUpperCase() + winner.slice(1)} wins. Betting open for the next hand.`,
-        },
-        `Baccarat settled: ${winner.toUpperCase()} wins.`
-      )
-    );
-  }, [multiplayer, seats.length, mySeatIndex, timer, sharedState, roundId]);
-
-  // each device settles its own bankroll for its own seat
-  useEffect(() => {
-    if (!multiplayer) return;
-    if (mySeatIndex < 0) return;
-    if (roundId <= 0) return;
-    if (processedRoundRef.current === roundId) return;
-
-    const seat = seats[mySeatIndex];
-    if (!seat) return;
-
-    const totalCommit = seat.wager + seat.playerPairBet + seat.bankerPairBet;
-    if (!canAfford(totalCommit)) return;
-
-    spendChips(totalCommit);
-
-    const winner = resultSide(playerTotal, bankerTotal);
-    if (winner === seat.betSide) {
-      if (winner === 'player') addChips(seat.wager * 2);
-      else if (winner === 'banker') addChips(Math.floor(seat.wager * 1.95));
-      else addChips(seat.wager * 9);
-    }
-
-    const playerPairWin = pairPayout(playerHand, seat.playerPairBet);
-    const bankerPairWin = pairPayout(bankerHand, seat.bankerPairBet);
-    if (playerPairWin > 0) addChips(playerPairWin);
-    if (bankerPairWin > 0) addChips(bankerPairWin);
-
-    processedRoundRef.current = roundId;
-  }, [multiplayer, roundId, mySeatIndex, seats, playerTotal, bankerTotal, playerHand, bankerHand]);
-
-  useEffect(() => {
-    if (!multiplayer) return;
-    const cleanup = () => {
-      try {
-        if (mySeatIndex >= 0) leaveSeat();
-      } catch {}
-    };
-    window.addEventListener('pagehide', cleanup);
-    window.addEventListener('beforeunload', cleanup);
-    return () => {
-      window.removeEventListener('pagehide', cleanup);
-      window.removeEventListener('beforeunload', cleanup);
-      cleanup();
-    };
-  }, [multiplayer, mySeatIndex, seats]);
-
   // baccaratLeaveCleanupInstalled
-  useEffect(() => {
-    if (!multiplayer) return;
-
-    const cleanup = () => {
-      try {
-        const currentSeats = Array.isArray(sharedState?.seats) ? sharedState.seats : [];
-        const currentSpectators = Array.isArray(sharedState?.spectators) ? sharedState.spectators : [];
-        if (!currentSeats.some((s) => s.playerId === playerId)) return;
-
-        pushState({
-          ...sharedState,
-          seats: currentSeats.filter((s) => s.playerId !== playerId),
-          spectators: currentSpectators.some((s) => s.playerId === playerId)
-            ? currentSpectators
-            : [...currentSpectators, { playerId, name: displayName }],
-          status: `${displayName} left the table.`,
-          logs: [`${displayName} left the table.`, ...(Array.isArray(sharedState?.logs) ? sharedState.logs : [])].slice(0, 14),
-        });
-      } catch {}
-    };
-
-    window.addEventListener('pagehide', cleanup);
-    window.addEventListener('beforeunload', cleanup);
-
-    return () => {
-      window.removeEventListener('pagehide', cleanup);
-      window.removeEventListener('beforeunload', cleanup);
-      cleanup();
-    };
-  }, [multiplayer, sharedState, playerId, displayName, pushState]);
 
   const title = multiplayer ? 'Baccarat' : 'Baccarat';
   const subtitle = multiplayer
     ? ''
     : '';
+
+
+  // tableExitAndStalePruneInstalled
+  function removeCurrentPlayerFromTable() {
+    try {
+      const currentSeats = Array.isArray(sharedState?.seats) ? sharedState.seats : [];
+      if (!currentSeats.some((s: any) => s.playerId === playerId)) return;
+
+      const nextSeats = currentSeats.filter((s: any) => s.playerId !== playerId);
+
+      pushState({
+        ...sharedState,
+        seats: nextSeats,
+        
+        
+        spectators: Array.isArray(sharedState?.spectators)
+          ? sharedState.spectators.some((s: any) => s.playerId === playerId)
+            ? sharedState.spectators
+            : [...sharedState.spectators, { playerId, name: displayName }]
+          : [{ playerId, name: displayName }],
+        status: `${displayName} left the table.`,
+        logs: [`${displayName} left the table.`, ...(Array.isArray(sharedState?.logs) ? sharedState.logs : [])].slice(0, 16),
+      });
+    } catch {}
+  }
+
+  useTableExitCleanup(removeCurrentPlayerFromTable, Boolean(multiplayer) && mySeatIndex >= 0);
+
+  useEffect(() => {
+    if (!multiplayer) return;
+    if (!Array.isArray(seats)) return;
+    if (!Array.isArray(roomPlayers)) return;
+    if (mySeatIndex !== 0 && seats.length > 0) return;
+
+    const connected = JSON.stringify(roomPlayers);
+    const nextSeats = seats.filter((s: any) => {
+      if (!s?.playerId) return false;
+      if (String(s.playerId).startsWith('bot')) return true;
+      return connected.includes(String(s.playerId).slice(-4));
+    });
+
+    if (nextSeats.length !== seats.length) {
+      pushState({
+        ...sharedState,
+        seats: nextSeats,
+        
+        
+        status: 'Disconnected players were removed from the table.',
+        logs: ['Disconnected players were removed from the table.', ...(Array.isArray(sharedState?.logs) ? sharedState.logs : [])].slice(0, 16),
+      });
+    }
+  }, [multiplayer, mySeatIndex, seats, roomPlayers]);
+
 
   return (
     <GameShell title={title} subtitle={subtitle}>
