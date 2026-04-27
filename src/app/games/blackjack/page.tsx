@@ -1064,7 +1064,7 @@ export default function BlackjackPage() {
   return (
     <GameShell
       title="Blackjack"
-      subtitle={multiplayer ? 'Compact table layout with player actions inside your seat, clearer status, and continuous round flow.' : 'Solo blackjack with CPU support, side bets, and your own timing settings.'}
+      subtitle={multiplayer ? '' : ''}
     >
       <div style={{ '--accent-glow': accentGlow } as any} className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
         <div className="space-y-4">

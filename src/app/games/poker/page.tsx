@@ -852,7 +852,7 @@ export default function PokerPage() {
   return (
     <GameShell
       title="Poker"
-      subtitle={multiplayer ? 'Online poker with spectators, ready-yourself-only flow, and synchronized 20 second table timing.' : 'Solo poker with local bots you can add or remove freely.'}
+      subtitle={multiplayer ? '' : ''}
     >
       <div style={{ '--accent-glow': accentGlow } as any} className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
         <div className="space-y-4">

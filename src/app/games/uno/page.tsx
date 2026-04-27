@@ -675,7 +675,7 @@ export default function UnoPage() {
       {pendingPicker}
       <GameShell
         title="UNO"
-        subtitle={multiplayerMode ? 'Online UNO with synchronized table play.' : 'Solo UNO with local CPU seats.'}
+        subtitle={multiplayerMode ? '' : ''}
       >
         <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
           <div className="space-y-4">

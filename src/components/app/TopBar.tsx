@@ -104,7 +104,7 @@ export function TopBar() {
             <div className="space-y-2">
               <div className="text-sm font-semibold text-zinc-200">Session</div>
               <label className="flex items-center justify-between rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm">
-                <span>Multiplayer Table</span>
+                <span>Multiplayer</span>
                 <input type="checkbox" checked={localPlay} onChange={(e) => setLocalPlay(e.target.checked)} />
               </label>
               <label className="flex items-center justify-between rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm">

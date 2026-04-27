@@ -161,7 +161,7 @@ export default function SpadesPage() {
   return (
     <GameShell
       title="Spades"
-      subtitle="Back to a real 4-player, 2-team structure with bidding and trick play."
+      subtitle=""
     >
       <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
         <div className="space-y-4">

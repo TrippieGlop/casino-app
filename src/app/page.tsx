@@ -23,7 +23,7 @@ export default function Home() {
       <div className="mx-auto grid min-h-screen max-w-7xl items-center gap-8 px-6 py-12 lg:grid-cols-2">
         <div>
           <div className="mb-6 inline-flex rounded-full border border-emerald-400/20 bg-emerald-400/10 px-4 py-2 text-sm text-emerald-300">
-            Casino-style card games, all in one place
+            Casino style card games, all in one place
           </div>
 
           <h1 className="bg-gradient-to-r from-emerald-300 via-cyan-300 to-blue-400 bg-clip-text text-6xl font-black tracking-tight text-transparent md:text-8xl">
@@ -31,8 +31,7 @@ export default function Home() {
           </h1>
 
           <p className="mt-6 max-w-2xl text-lg leading-8 text-zinc-300">
-            Jump into sleek table games, track your bankroll, customize your look, and
-            play against friends or CPU opponents in a smoother, more polished experience.
+            Play Blackjack, Poker, and other classic casino games on CardHub.
           </p>
 
           <div className="mt-10">

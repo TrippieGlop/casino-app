@@ -17,7 +17,7 @@ export function ModeControl() {
       <div className="text-sm font-medium text-zinc-200">Session Settings</div>
 
       <label className="flex items-center justify-between gap-3 rounded-xl bg-zinc-900 px-3 py-2 text-sm text-zinc-200">
-        <span>Multiplayer Table</span>
+        <span>Multiplayer</span>
         <input
           type="checkbox"
           checked={localPlay}

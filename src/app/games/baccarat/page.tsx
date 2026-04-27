@@ -592,8 +592,8 @@ export default function BaccaratPage() {
 
   const title = multiplayer ? 'Baccarat' : 'Baccarat';
   const subtitle = multiplayer
-    ? 'Online table with human-only seats, synchronized 20 second dealing, and spectator support.'
-    : 'Solo baccarat with local bots you can add or remove whenever you want.';
+    ? ''
+    : '';
 
   return (
     <GameShell title={title} subtitle={subtitle}>

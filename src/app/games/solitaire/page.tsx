@@ -120,7 +120,7 @@ export default function SolitairePage() {
   return (
     <GameShell
       title="Solitaire"
-      subtitle="Controls now visibly move the stock, waste, and foundations so the game actually progresses."
+      subtitle=""
     >
       <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
         <div className="space-y-4">

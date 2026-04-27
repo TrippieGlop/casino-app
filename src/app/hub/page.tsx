@@ -59,7 +59,7 @@ export default function HubPage() {
 
             <h1 className="text-4xl font-black tracking-tight">Choose Your Game</h1>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-zinc-300">
-              Pick a table, settle in, and play your way. Your bankroll, settings, and style all stay with you.
+              
             </p>
 
             <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -90,7 +90,7 @@ export default function HubPage() {
                         {game.cpuSupported ? 'CPU Support' : 'No CPU'}
                       </span>
                       <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">
-                        {game.localPlaySupported ? 'Multiplayer Table' : 'Solo Only'}
+                        {game.localPlaySupported ? 'Multiplayer' : 'Solo Only'}
                       </span>
                     </div>
 
@@ -116,7 +116,7 @@ export default function HubPage() {
           </div>
 
           <div className="rounded-3xl border border-white/10 bg-black/30 p-6 shadow-xl">
-            <h2 className="text-xl font-semibold">Player Snapshot</h2>
+            <h2 className="text-xl font-semibold">Player Activity</h2>
 
             <div className="mt-4 space-y-3 text-sm text-zinc-300">
               <label className="block rounded-xl bg-white/5 px-4 py-3">
@@ -133,7 +133,7 @@ export default function HubPage() {
               <div className="rounded-xl bg-white/5 px-4 py-3">Bankroll: <span className="font-semibold text-emerald-300">${account.bankroll}</span></div>
               <div className="rounded-xl bg-white/5 px-4 py-3">Streak: <span className="font-semibold">{account.streak}</span></div>
               <div className="rounded-xl bg-white/5 px-4 py-3">CPU: <span className="font-semibold capitalize">{difficulty}</span></div>
-              <div className="rounded-xl bg-white/5 px-4 py-3">Mode: <span className="font-semibold">{localPlay ? 'Multiplayer Table' : 'CPU / Solo'}</span></div>
+              <div className="rounded-xl bg-white/5 px-4 py-3">Mode: <span className="font-semibold">{localPlay ? 'Multiplayer' : 'CPU / Solo'}</span></div>
               <div className="rounded-xl bg-white/5 px-4 py-3">
                 Session: wagered ${account.session.wagered} • won ${account.session.won} • lost ${account.session.lost} • profit ${account.session.profit}
               </div>
