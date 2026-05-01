@@ -238,6 +238,7 @@ export default function UnoPage() {
   const deck = Array.isArray(state?.deck) ? state.deck : [];
   const topCard = discard[discard.length - 1];
   const mySeatIndex = seats.findIndex((s) => s.playerId === playerId);
+  const isTableHost = mySeatIndex >= 0 && seats.findIndex((s: any) => !!s?.playerId) === mySeatIndex;
   const mySeat = mySeatIndex >= 0 ? seats[mySeatIndex] : null;
   const isMyTurn = state.started && state.turn === mySeatIndex;
 
@@ -695,6 +696,31 @@ export default function UnoPage() {
   }, [multiplayerMode, mySeatIndex, seats, roomPlayers]);
 
 
+  // sharedMultiplayerTimerRepairInstalled
+  useEffect(() => {
+    if (!multiplayerMode) return;
+    if (!isTableHost) return;
+    if (state.started) return;
+    if (!Array.isArray(seats) || seats.length < 2) return;
+    if (!seats.every((s: any) => s.ready)) return;
+    if (typeof allPlayersAgreeOnWager === 'function' && !allPlayersAgreeOnWager(seats)) return;
+
+    const id = window.setInterval(() => {
+      const currentTimer = typeof state?.timer === 'number' ? state.timer : TIMER;
+      if (currentTimer <= 1) {
+        startGame();
+      } else {
+        push({
+          ...state,
+          timer: currentTimer - 1,
+          status: `Starting in ${currentTimer - 1} seconds.`,
+        });
+      }
+    }, 1000);
+
+    return () => window.clearInterval(id);
+  }, [multiplayerMode, isTableHost, state.started, seats, state.timer]);
+
   return (
     <>
       {pendingPicker}
@@ -812,7 +838,7 @@ export default function UnoPage() {
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="font-semibold">{seat.name}</div>
-                        <div className="text-sm text-zinc-400">{(Array.isArray(seat.cards) ? seat.cards.length : 0)} cards • Wager ${seat.agreedWager} {idx === state.turn && state.started ? '• Turn' : ''}</div>
+                        <div className="text-sm text-zinc-400">{(Array.isArray(seat.cards) ? (Array.isArray(seat.cards) ? seat.cards.length : 0) : 0)} cards • Wager ${seat.agreedWager} {idx === state.turn && state.started ? '• Turn' : ''}</div>
                       </div>
                       {idx === mySeatIndex && !state.started ? (
                         <button

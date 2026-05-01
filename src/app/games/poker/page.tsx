@@ -438,6 +438,7 @@ export default function PokerPage() {
   const timer = typeof sharedState?.timer === 'number' ? sharedState.timer : ONLINE_TIMER;
   const handId = typeof sharedState?.handId === 'number' ? sharedState.handId : 0;
   const mySeatIndex = seats.findIndex((seat) => seat.playerId === playerId);
+  const isTableHost = mySeatIndex >= 0 && seats.findIndex((s: any) => !!s?.playerId) === mySeatIndex;
   const mySeat = mySeatIndex >= 0 ? seats[mySeatIndex] : null;
   const isSpectator = mySeatIndex < 0;
 
@@ -837,6 +838,29 @@ export default function PokerPage() {
     }
   }, [multiplayer, mySeatIndex, seats, roomPlayers]);
 
+
+  // sharedMultiplayerTimerRepairInstalled
+  useEffect(() => {
+    if (!multiplayer) return;
+    if (!isTableHost) return;
+    if (phase !== 'ready') return;
+    if (!Array.isArray(seats) || seats.filter((s: any) => s.ready).length < 2) return;
+
+    const id = window.setInterval(() => {
+      const currentTimer = typeof sharedState?.timer === 'number' ? sharedState.timer : ONLINE_TIMER;
+      if (currentTimer <= 1) {
+        startOnlineHand();
+      } else {
+        pushState({
+          ...sharedState,
+          timer: currentTimer - 1,
+          status: `Starting next hand in ${currentTimer - 1} seconds.`,
+        });
+      }
+    }, 1000);
+
+    return () => window.clearInterval(id);
+  }, [multiplayer, isTableHost, phase, seats, sharedState.timer]);
 
   return (
     <GameShell

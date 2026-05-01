@@ -668,7 +668,15 @@ export default function BlackjackPage() {
     }), [])
   );
 
-  const seats = Array.isArray(sharedState?.seats) ? sharedState.seats : [];
+  const seats = Array.isArray(sharedState?.seats)
+    ? sharedState.seats
+        .filter((seat: any) => !!seat?.playerId)
+        .map((seat: any) => ({
+          ...seat,
+          hands: Array.isArray(seat.hands) ? seat.hands : [makeEmptyHand()],
+          activeHand: typeof seat.activeHand === 'number' ? seat.activeHand : 0,
+        }))
+    : [];
   const spectators = Array.isArray(sharedState?.spectators) ? sharedState.spectators : [];
   const deck = Array.isArray(sharedState?.deck) ? sharedState.deck : [];
   const dealer = Array.isArray(sharedState?.dealer) ? sharedState.dealer : [];
@@ -678,8 +686,9 @@ export default function BlackjackPage() {
   const dealerTotal = typeof sharedState?.dealerTotal === 'number' ? sharedState.dealerTotal : 0;
   const activeSeat = typeof sharedState?.activeSeat === 'number' ? sharedState.activeSeat : -1;
   const mySeatIndex = seats.findIndex((s) => s.playerId === playerId);
+  const isTableHost = mySeatIndex >= 0 && seats.findIndex((s: any) => !!s?.playerId) === mySeatIndex;
   const mySeat = mySeatIndex >= 0 ? seats[mySeatIndex] : null;
-  const myActiveHand = mySeat ? mySeat.hands[mySeat.activeHand] : null;
+  const myActiveHand = mySeat && Array.isArray(mySeat.hands) ? mySeat.hands[mySeat.activeHand || 0] : null;
 
   const latestRef = useRef({ seats, spectators, sharedState, mySeatIndex, phase, activeSeat });
   useEffect(() => {
@@ -729,66 +738,29 @@ export default function BlackjackPage() {
   function leaveSeat() {
     if (mySeatIndex < 0) return;
 
-    if (phase !== 'betting') {
-      const nextSeats = seats.map((seat, i) =>
-        i === mySeatIndex
-          ? {
-              ...seat,
-              playerId: null,
-              name: 'Open Seat',
-              hands: [makeEmptyHand()],
-              activeHand: 0,
-            }
-          : seat
-      );
+    const nextSeats = seats.filter((seat: any) => seat.playerId && seat.playerId !== playerId);
 
-      const nextState = withLogMulti(
-        {
-          ...sharedState,
-          seats: nextSeats,
-          spectators: spectators.some((s) => s.playerId === playerId)
-            ? spectators
-            : [...spectators, { playerId, name: displayName }],
-          status: `${displayName} left the table.`,
-        },
-        `${displayName} left the table.`
-      );
-
-      const remaining = nextSeats.filter((seat) => seat.playerId);
-      if (!remaining.length) {
-        push({
-          ...nextState,
-          phase: 'betting',
-          activeSeat: -1,
-          timer: ONLINE_TIMER,
-          dealer: [],
-          dealerTotal: 0,
-          deck: [],
-          status: 'All players left. Waiting for new seats.',
-        });
-        return;
-      }
-
-      if (activeSeat === mySeatIndex) {
-        const nextTurn = nextPlayableSeat(nextSeats, mySeatIndex, (seat) => !!seat.playerId);
-        push({
-          ...nextState,
-          activeSeat: nextTurn,
-          status: nextTurn >= 0 ? `${nextSeats[nextTurn].name} to act.` : 'Dealer turn.',
-        });
-        return;
-      }
-
-      push(nextState);
-      return;
-    }
+    const nextActive =
+      activeSeat === mySeatIndex
+        ? nextSeats.findIndex((seat: any) => {
+            const hands = Array.isArray(seat.hands) ? seat.hands : [];
+            return seat.playerId && hands.some((h: any) => !h.finished);
+          })
+        : Math.min(activeSeat, Math.max(-1, nextSeats.length - 1));
 
     push({
       ...sharedState,
-      seats: seats.filter((s) => s.playerId !== playerId),
-      spectators: spectators.some((s) => s.playerId === playerId)
-        ? spectators
-        : [...spectators, { playerId, name: displayName }],
+      seats: nextSeats,
+      spectators: Array.isArray(spectators)
+        ? spectators.some((s: any) => s.playerId === playerId)
+          ? spectators
+          : [...spectators, { playerId, name: displayName }]
+        : [{ playerId, name: displayName }],
+      activeSeat: nextActive,
+      phase: nextSeats.length ? phase : 'betting',
+      timer: nextSeats.length ? sharedState.timer : ONLINE_TIMER,
+      status: `${displayName} left the table.`,
+      logs: [`${displayName} left the table.`, ...(Array.isArray(sharedState?.logs) ? sharedState.logs : [])].slice(0, 16),
     });
   }
 
@@ -915,6 +887,246 @@ export default function BlackjackPage() {
       });
     }
   }, [multiplayer, mySeatIndex, seats, roomPlayers]);
+
+
+  // sharedMultiplayerTimerRepairInstalled
+  useEffect(() => {
+    if (!multiplayer) return;
+    if (!isTableHost) return;
+    if (phase !== 'betting') return;
+    if (!Array.isArray(seats) || seats.filter((s: any) => !!s.playerId).length < 1) return;
+
+    const id = window.setInterval(() => {
+      const currentTimer = typeof sharedState?.timer === 'number' ? sharedState.timer : ONLINE_TIMER;
+      if (currentTimer <= 1) {
+        beginMultiRound();
+      } else {
+        pushState({
+          ...sharedState,
+          timer: currentTimer - 1,
+          status: `Betting closes in ${currentTimer - 1} seconds.`,
+        });
+      }
+    }, 1000);
+
+    return () => window.clearInterval(id);
+  }, [multiplayer, isTableHost, phase, seats, sharedState.timer]);
+
+
+  function settleMultiRound(nextSeats: any[], nextDeck: BJCard[]) {
+    const stillPlaying = nextSeats.findIndex((seat: any) => {
+      if (!seat?.playerId) return false;
+      const hands = Array.isArray(seat.hands) ? seat.hands : [];
+      return hands.some((h: any) => !h.finished);
+    });
+
+    if (stillPlaying >= 0) {
+      push({
+        ...sharedState,
+        seats: nextSeats,
+        deck: nextDeck,
+        activeSeat: stillPlaying,
+        status: `${nextSeats[stillPlaying]?.name || 'Player'} to act.`,
+      });
+      return;
+    }
+
+    let nextDealer = Array.isArray(dealer) ? [...dealer] : [];
+    let nextDealerTotal = handTotal(nextDealer);
+
+    while (nextDealerTotal < 17 && nextDeck.length) {
+      const card = nextDeck.shift();
+      if (!card) break;
+      nextDealer.push(card);
+      nextDealerTotal = handTotal(nextDealer);
+    }
+
+    if (mySeatIndex >= 0 && nextSeats[mySeatIndex]) {
+      const seat = nextSeats[mySeatIndex];
+      const wagerAmount = typeof seat.wager === 'number' ? seat.wager : multiWager;
+      const hands = Array.isArray(seat.hands) ? seat.hands : [];
+      hands.forEach((hand: any) => {
+        settlePlayerMainPayout(hand, nextDealer, nextDealerTotal, wagerAmount, addChips);
+      });
+    }
+
+    push({
+      ...sharedState,
+      seats: nextSeats
+        .filter((seat: any) => !!seat?.playerId)
+        .map((seat: any) => ({
+          ...seat,
+          hands: [makeEmptyHand()],
+          activeHand: 0,
+        })),
+      deck: [],
+      dealer: nextDealer,
+      dealerTotal: nextDealerTotal,
+      phase: 'betting',
+      activeSeat: -1,
+      timer: ONLINE_TIMER,
+      status: 'Betting open for the next hand.',
+      logs: ['Dealer settled the hand.', ...(Array.isArray(sharedState?.logs) ? sharedState.logs : [])].slice(0, 16),
+    });
+  }
+
+  function updateCurrentHand(transform: (hand: HandState, nextDeck: BJCard[]) => void) {
+    if (mySeatIndex < 0 || activeSeat !== mySeatIndex || phase !== 'player') return;
+
+    const nextSeats = seats
+      .filter((seat: any) => !!seat?.playerId)
+      .map((seat: any) => ({
+        ...seat,
+        activeHand: typeof seat.activeHand === 'number' ? seat.activeHand : 0,
+        hands: Array.isArray(seat.hands)
+          ? seat.hands.map((hand: any) => ({
+              ...hand,
+              cards: Array.isArray(hand.cards) ? [...hand.cards] : [],
+              total: typeof hand.total === 'number' ? hand.total : handTotal(Array.isArray(hand.cards) ? hand.cards : []),
+              stood: Boolean(hand.stood),
+              busted: Boolean(hand.busted),
+              doubled: Boolean(hand.doubled),
+              finished: Boolean(hand.finished),
+            }))
+          : [makeEmptyHand()],
+      }));
+
+    const currentSeatIndex = nextSeats.findIndex((seat: any) => seat.playerId === playerId);
+    if (currentSeatIndex < 0) return;
+
+    const nextDeck = Array.isArray(deck) ? [...deck] : [];
+    const seat = nextSeats[currentSeatIndex];
+    const handIndex = seat.activeHand || 0;
+    const hand = seat.hands[handIndex];
+
+    if (!hand || hand.finished) return;
+
+    transform(hand, nextDeck);
+
+    if (
+      hand.finished &&
+      handIndex + 1 < seat.hands.length &&
+      !seat.hands[handIndex + 1].finished
+    ) {
+      seat.activeHand = handIndex + 1;
+      push({
+        ...sharedState,
+        seats: nextSeats,
+        deck: nextDeck,
+        activeSeat: currentSeatIndex,
+        status: `${seat.name}'s next hand.`,
+      });
+      return;
+    }
+
+    if (seat.hands.some((h: any) => !h.finished)) {
+      push({
+        ...sharedState,
+        seats: nextSeats,
+        deck: nextDeck,
+      });
+      return;
+    }
+
+    settleMultiRound(nextSeats, nextDeck);
+  }
+
+  function hit() {
+    updateCurrentHand((hand, nextDeck) => {
+      const nextCard = nextDeck.shift();
+      if (!nextCard) return;
+
+      hand.cards.push(nextCard);
+      hand.total = handTotal(hand.cards);
+
+      if (hand.total > 21) {
+        hand.busted = true;
+        hand.finished = true;
+      }
+    });
+  }
+
+  function stand() {
+    updateCurrentHand((hand) => {
+      hand.stood = true;
+      hand.finished = true;
+    });
+  }
+
+  function doubleDown() {
+    if (!myActiveHand || myActiveHand.cards.length !== 2) return;
+    if (!canAfford(multiWager)) return;
+
+    spendChips(multiWager);
+
+    updateCurrentHand((hand, nextDeck) => {
+      const nextCard = nextDeck.shift();
+      if (!nextCard) return;
+
+      hand.doubled = true;
+      hand.cards.push(nextCard);
+      hand.total = handTotal(hand.cards);
+
+      if (hand.total > 21) {
+        hand.busted = true;
+      }
+
+      hand.finished = true;
+      hand.stood = !hand.busted;
+    });
+  }
+
+  function split() {
+    if (!myActiveHand || myActiveHand.cards.length !== 2) return;
+    if (!sameRank(myActiveHand.cards[0], myActiveHand.cards[1])) return;
+    if (!canAfford(multiWager)) return;
+
+    spendChips(multiWager);
+
+    const nextSeats = seats.map((seat: any) => ({
+      ...seat,
+      hands: Array.isArray(seat.hands)
+        ? seat.hands.map((hand: any) => ({ ...hand, cards: Array.isArray(hand.cards) ? [...hand.cards] : [] }))
+        : [makeEmptyHand()],
+    }));
+
+    const nextDeck = [...deck];
+    const seat = nextSeats[mySeatIndex];
+    const hand = seat.hands[seat.activeHand || 0];
+
+    const first = hand.cards[0];
+    const second = hand.cards[1];
+    const firstDraw = nextDeck.shift();
+    const secondDraw = nextDeck.shift();
+
+    if (!firstDraw || !secondDraw) return;
+
+    seat.hands[seat.activeHand || 0] = {
+      cards: [first, firstDraw],
+      total: handTotal([first, firstDraw]),
+      stood: false,
+      busted: false,
+      doubled: false,
+      finished: false,
+    };
+
+    seat.hands.splice((seat.activeHand || 0) + 1, 0, {
+      cards: [second, secondDraw],
+      total: handTotal([second, secondDraw]),
+      stood: false,
+      busted: false,
+      doubled: false,
+      finished: false,
+    });
+
+    push({
+      ...sharedState,
+      seats: nextSeats,
+      deck: nextDeck,
+      status: `${displayName} split the hand.`,
+      logs: [`${displayName} split the hand.`, ...(Array.isArray(sharedState?.logs) ? sharedState.logs : [])].slice(0, 16),
+    });
+  }
 
 
   return (

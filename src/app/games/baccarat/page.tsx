@@ -376,6 +376,7 @@ export default function BaccaratPage() {
   const roundId = typeof sharedState?.roundId === 'number' ? sharedState.roundId : 0;
   const logs = Array.isArray(sharedState?.logs) ? sharedState.logs : [];
   const mySeatIndex = seats.findIndex((s) => s.playerId === playerId);
+  const isTableHost = mySeatIndex >= 0 && seats.findIndex((s: any) => !!s?.playerId) === mySeatIndex;
   const mySeat = mySeatIndex >= 0 ? seats[mySeatIndex] : null;
   const isSpectator = mySeatIndex < 0;
 
@@ -492,6 +493,45 @@ export default function BaccaratPage() {
     }
   }, [multiplayer, mySeatIndex, seats, roomPlayers]);
 
+
+  // sharedMultiplayerTimerRepairInstalled
+  useEffect(() => {
+    if (!multiplayer) return;
+    if (!isTableHost) return;
+    if (!Array.isArray(seats) || seats.filter((s: any) => !!s.playerId).length < 1) return;
+
+    const id = window.setInterval(() => {
+      const currentTimer = typeof sharedState?.timer === 'number' ? sharedState.timer : ONLINE_TIMER;
+      if (currentTimer <= 1) {
+        const deck = makeDeck();
+        const nextPlayerHand = [deck.shift()!, deck.shift()!];
+        const nextBankerHand = [deck.shift()!, deck.shift()!];
+        const nextPlayerTotal = baccaratTotal(nextPlayerHand);
+        const nextBankerTotal = baccaratTotal(nextBankerHand);
+        const winner = resultSide(nextPlayerTotal, nextBankerTotal);
+
+        pushState({
+          ...sharedState,
+          playerHand: nextPlayerHand,
+          bankerHand: nextBankerHand,
+          playerTotal: nextPlayerTotal,
+          bankerTotal: nextBankerTotal,
+          timer: ONLINE_TIMER,
+          roundId: (typeof sharedState?.roundId === 'number' ? sharedState.roundId : 0) + 1,
+          status: `${winner[0].toUpperCase() + winner.slice(1)} wins. Betting open for the next hand.`,
+          logs: [`Baccarat settled: ${winner.toUpperCase()} wins.`, ...(Array.isArray(sharedState?.logs) ? sharedState.logs : [])].slice(0, 14),
+        });
+      } else {
+        pushState({
+          ...sharedState,
+          timer: currentTimer - 1,
+          status: `Next hand in ${currentTimer - 1} seconds.`,
+        });
+      }
+    }, 1000);
+
+    return () => window.clearInterval(id);
+  }, [multiplayer, isTableHost, seats, sharedState.timer]);
 
   return (
     <GameShell title={title} subtitle={subtitle}>
